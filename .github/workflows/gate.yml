@@ -1,0 +1,28 @@
+name: gate
+# Veridia is a kernel-backed page. This gate proves the whole cell on every push: the adjudication
+# contract holds, the mutation gate is CLEAN, the LIVE page runs that exact kernel, and the page is
+# self-contained with no dead links. No green is faked here.
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      - name: the adjudication contract holds
+        run: node --test test.mjs
+
+      - name: the mutation gate is CLEAN (kernel.mjs is not test-theatre)
+        run: |
+          node tools/witness.mjs mutate kernel.mjs --timeout 30000 --cap 500 --test node --test test.mjs | tee gate.out || true
+          node -e "const b=require('fs').readFileSync('gate.out','utf8');const j=JSON.parse(b.slice(b.indexOf('{'),b.lastIndexOf('}')+1));if(j.clean!==true){console.error('GATE NOT CLEAN');process.exit(1)}console.log('CLEAN '+j.killed+'/'+j.total)"
+
+      - name: the LIVE page IS the gated kernel (fixpoint)
+        run: |
+          node make-page.mjs
+          git diff --exit-code index.html
+
+      - name: the page is self-contained — parses, no placeholders, no dead links
+        run: node tools/page-gate.mjs

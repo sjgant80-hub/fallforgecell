@@ -1,0 +1,10 @@
+# One line-ending everywhere. The page fixpoint (make-page.mjs writes LF) and the manifest hashes
+# depend on it: CRLF blobs would make CI's Linux checkout differ from the LF the generator produces.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
