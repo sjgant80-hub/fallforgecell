@@ -234,3 +234,93 @@ export function verifyCrosscheckReceipt(r) {
   if (new Set(fps).size !== fps.length) return { ok: true, valid: false, why: 'the panel is not independent — duplicate models, so the agreement is not verification' };
   return { ok: true, valid: true, why: 'cross-check intact' };
 }
+
+// ── the tetrahedron: compose cross-checks into a verified PROCESS ─────────────────────────────────
+// The triangle proves ONE answer correct. The tetra proves a PROCESS correct: a pipeline where every
+// step is its own triangle cross-check, and each step BINDS the previous step's ACCEPTED output (not
+// just declares a link — inputHash = sha256(canon(prior.accepted)), so you cannot swap the input).
+// A step that escalates a field does NOT silently halt the process (that would bin the accepted work)
+// and is NOT silently ignored (that would hide the gap): the pipeline continues on the accepted fields
+// and the composite verdict is FLAGGED, recording exactly which step needs a human. A broken/invalid
+// step or a broken seam cannot issue a pipeline receipt at all. Honest: it proves the process was
+// cross-checked and correctly chained, NOT that the final answer is true.
+export const MIN_STEPS = 2;   // one step is just a triangle; a pipeline is two or more
+
+export function composePipeline(steps, createdAt) {
+  if (!Array.isArray(steps)) return { ok: false, why: 'steps must be a list' };
+  if (steps.length < MIN_STEPS) return { ok: false, why: 'a pipeline needs at least ' + MIN_STEPS + ' steps' };
+  if (!isStr(createdAt)) return { ok: false, why: 'the pipeline needs a createdAt timestamp' };
+  if (createdAt.length === 0) return { ok: false, why: 'the pipeline needs a non-empty createdAt timestamp' };
+  const rows = [];
+  for (const [i, st] of steps.entries()) {
+    const n = i + 1;
+    if (!isObj(st)) return { ok: false, why: 'step ' + n + ' must be an object' };
+    if (!isStr(st.name)) return { ok: false, why: 'step ' + n + ' needs a name' };
+    if (st.name.trim().length === 0) return { ok: false, why: 'step ' + n + ' needs a non-empty name' };
+    if (!isObj(st.receipt)) return { ok: false, why: 'step ' + n + ' needs a cross-check receipt' };
+    const v = verifyCrosscheckReceipt(st.receipt);
+    if (!v.ok) return { ok: false, why: 'step ' + n + ' is not a cross-check receipt' };
+    if (!v.valid) return { ok: false, why: 'step ' + n + ' has an invalid receipt: ' + v.why };
+    // the seam: step 1 has no input; every later step must have consumed the PRIOR step's accepted output
+    if (i === 0) {
+      if (st.inputHash !== null && st.inputHash !== undefined) return { ok: false, why: 'the first step has no input to bind' };
+    } else {
+      const priorAccepted = sha256(canon(steps[i - 1].receipt.accepted || {}));
+      if (!priorAccepted.ok) return { ok: false, why: priorAccepted.why };
+      if (!isStr(st.inputHash)) return { ok: false, why: 'step ' + n + ' must bind its input' };
+      if (st.inputHash !== priorAccepted.hash) return { ok: false, why: 'step ' + n + ' did not consume step ' + (n - 1) + "'s accepted output — the seam is broken" };
+    }
+    rows.push({ name: st.name.trim(), receiptHash: st.receipt.hash, verdict: st.receipt.verdict, escalate: Array.isArray(st.receipt.escalate) ? st.receipt.escalate.slice() : [] });
+  }
+  let hasSplit = false, hasMajority = false;
+  for (const r of rows) {
+    if (r.verdict === 'SPLIT') hasSplit = true;
+    if (r.verdict === 'MAJORITY') hasMajority = true;
+  }
+  const verdict = hasSplit ? 'FLAGGED' : (hasMajority ? 'MAJORITY' : 'CLEAN');
+  const body = {
+    v: 1,
+    kind: 'veridia-pipeline',
+    steps: rows,
+    verdict, createdAt,
+    scope: "A verified process: each step is an independent cross-check, and each step consumed the previous step's ACCEPTED output (the seam is bound, not just declared). CLEAN = every step's panel agreed; MAJORITY = some step needed a majority; FLAGGED = a step escalated a field to a human. It proves the process was cross-checked and correctly chained, not that the final answer is true.",
+  };
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  return { ok: true, receipt: { ...body, hash: h.hash } };
+}
+
+/** pipelineSignable(receipt) — the exact canonical bytes an Ed25519 signature covers (minus signature). */
+export function pipelineSignable(receipt) {
+  if (!isObj(receipt)) return { ok: false, why: 'not a veridia pipeline receipt' };
+  if (receipt.kind !== 'veridia-pipeline') return { ok: false, why: 'not a veridia pipeline receipt' };
+  if (!isStr(receipt.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...receipt };
+  delete body.signature;
+  return { ok: true, payload: canon(body) };
+}
+
+/** verifyPipelineReceipt(r) — matches its own hash AND the composite verdict matches its steps. */
+export function verifyPipelineReceipt(r) {
+  if (!isObj(r)) return { ok: false, why: 'not a veridia pipeline receipt' };
+  if (r.kind !== 'veridia-pipeline') return { ok: false, why: 'not a veridia pipeline receipt' };
+  if (!isStr(r.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...r };
+  delete body.hash;
+  delete body.signature;
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  if (h.hash !== r.hash) return { ok: true, valid: false, why: 'the receipt does not match its own fingerprint — it was changed after it was issued' };
+  if (!Array.isArray(r.steps)) return { ok: true, valid: false, why: 'the receipt has no steps' };
+  if (r.steps.length < MIN_STEPS) return { ok: true, valid: false, why: 'a pipeline needs at least ' + MIN_STEPS + ' steps' };
+  // the composite verdict must match the steps — a receipt claiming CLEAN over a FLAGGED step is a lie
+  let hasSplit = false, hasMajority = false;
+  for (const s of r.steps) {
+    if (!isObj(s)) return { ok: true, valid: false, why: 'a step is malformed' };
+    if (s.verdict === 'SPLIT') hasSplit = true;
+    if (s.verdict === 'MAJORITY') hasMajority = true;
+  }
+  const expected = hasSplit ? 'FLAGGED' : (hasMajority ? 'MAJORITY' : 'CLEAN');
+  if (r.verdict !== expected) return { ok: true, valid: false, why: 'the pipeline verdict does not match its steps' };
+  return { ok: true, valid: true, why: 'pipeline intact' };
+}

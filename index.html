@@ -125,6 +125,7 @@
   <span class="brand"><span class="tri">△</span> Veridia <span class="co">FallForge Cell</span></span>
   <nav class="top">
     <a href="#check">Cross-check</a>
+    <a href="#pipeline">Pipeline</a>
     <a href="#how">How</a>
     <a href="#verify">Verify a receipt</a>
     <a href="#faq">FAQ</a>
@@ -173,6 +174,20 @@
     </div>
     <p id="dlMsg" class="note"></p>
   </div>
+</div></section>
+
+<!-- THE TETRAHEDRON: PIPELINE -->
+<section id="pipeline"><div class="wrap">
+  <div class="eyebrow">△ The tetrahedron · a verified process</div>
+  <h2 class="sec">Chain cross-checks into a process you can prove.</h2>
+  <p class="sub">One cross-check proves one answer. A real job is several steps — extract, then classify, then reconcile. Veridia chains them: <b>each step is its own cross-check</b>, and each step is bound to the <b>accepted output</b> of the one before it (not just a declared link — you can't swap the input). The whole process gets one composite receipt.</p>
+  <div class="cta-row" style="margin-top:18px">
+    <button class="btn veri" id="pipeClean">Run a clean 2-step pipeline</button>
+    <button class="btn ghost" id="pipeFlag">Run one where a step needs a human</button>
+    <button class="btn ghost" id="pipeBroken">Try a broken seam</button>
+  </div>
+  <div id="pipeOut" class="card hidden" style="margin-top:16px;border-color:var(--veri)"></div>
+  <p class="note"><b>CLEAN</b> — every step's panel agreed. <b>MAJORITY</b> — some step needed a majority. <b>FLAGGED</b> — a step split a field, so the process continues on what was agreed and a human resolves that field. A broken step or a broken seam can't issue a receipt at all. It proves the process was cross-checked and correctly chained — not that the final answer is true.</p>
 </div></section>
 
 <!-- HOW -->
@@ -469,6 +484,96 @@ function verifyCrosscheckReceipt(r) {
   if (new Set(fps).size !== fps.length) return { ok: true, valid: false, why: 'the panel is not independent — duplicate models, so the agreement is not verification' };
   return { ok: true, valid: true, why: 'cross-check intact' };
 }
+
+// ── the tetrahedron: compose cross-checks into a verified PROCESS ─────────────────────────────────
+// The triangle proves ONE answer correct. The tetra proves a PROCESS correct: a pipeline where every
+// step is its own triangle cross-check, and each step BINDS the previous step's ACCEPTED output (not
+// just declares a link — inputHash = sha256(canon(prior.accepted)), so you cannot swap the input).
+// A step that escalates a field does NOT silently halt the process (that would bin the accepted work)
+// and is NOT silently ignored (that would hide the gap): the pipeline continues on the accepted fields
+// and the composite verdict is FLAGGED, recording exactly which step needs a human. A broken/invalid
+// step or a broken seam cannot issue a pipeline receipt at all. Honest: it proves the process was
+// cross-checked and correctly chained, NOT that the final answer is true.
+const MIN_STEPS = 2;   // one step is just a triangle; a pipeline is two or more
+
+function composePipeline(steps, createdAt) {
+  if (!Array.isArray(steps)) return { ok: false, why: 'steps must be a list' };
+  if (steps.length < MIN_STEPS) return { ok: false, why: 'a pipeline needs at least ' + MIN_STEPS + ' steps' };
+  if (!isStr(createdAt)) return { ok: false, why: 'the pipeline needs a createdAt timestamp' };
+  if (createdAt.length === 0) return { ok: false, why: 'the pipeline needs a non-empty createdAt timestamp' };
+  const rows = [];
+  for (const [i, st] of steps.entries()) {
+    const n = i + 1;
+    if (!isObj(st)) return { ok: false, why: 'step ' + n + ' must be an object' };
+    if (!isStr(st.name)) return { ok: false, why: 'step ' + n + ' needs a name' };
+    if (st.name.trim().length === 0) return { ok: false, why: 'step ' + n + ' needs a non-empty name' };
+    if (!isObj(st.receipt)) return { ok: false, why: 'step ' + n + ' needs a cross-check receipt' };
+    const v = verifyCrosscheckReceipt(st.receipt);
+    if (!v.ok) return { ok: false, why: 'step ' + n + ' is not a cross-check receipt' };
+    if (!v.valid) return { ok: false, why: 'step ' + n + ' has an invalid receipt: ' + v.why };
+    // the seam: step 1 has no input; every later step must have consumed the PRIOR step's accepted output
+    if (i === 0) {
+      if (st.inputHash !== null && st.inputHash !== undefined) return { ok: false, why: 'the first step has no input to bind' };
+    } else {
+      const priorAccepted = sha256(canon(steps[i - 1].receipt.accepted || {}));
+      if (!priorAccepted.ok) return { ok: false, why: priorAccepted.why };
+      if (!isStr(st.inputHash)) return { ok: false, why: 'step ' + n + ' must bind its input' };
+      if (st.inputHash !== priorAccepted.hash) return { ok: false, why: 'step ' + n + ' did not consume step ' + (n - 1) + "'s accepted output — the seam is broken" };
+    }
+    rows.push({ name: st.name.trim(), receiptHash: st.receipt.hash, verdict: st.receipt.verdict, escalate: Array.isArray(st.receipt.escalate) ? st.receipt.escalate.slice() : [] });
+  }
+  let hasSplit = false, hasMajority = false;
+  for (const r of rows) {
+    if (r.verdict === 'SPLIT') hasSplit = true;
+    if (r.verdict === 'MAJORITY') hasMajority = true;
+  }
+  const verdict = hasSplit ? 'FLAGGED' : (hasMajority ? 'MAJORITY' : 'CLEAN');
+  const body = {
+    v: 1,
+    kind: 'veridia-pipeline',
+    steps: rows,
+    verdict, createdAt,
+    scope: "A verified process: each step is an independent cross-check, and each step consumed the previous step's ACCEPTED output (the seam is bound, not just declared). CLEAN = every step's panel agreed; MAJORITY = some step needed a majority; FLAGGED = a step escalated a field to a human. It proves the process was cross-checked and correctly chained, not that the final answer is true.",
+  };
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  return { ok: true, receipt: { ...body, hash: h.hash } };
+}
+
+/** pipelineSignable(receipt) — the exact canonical bytes an Ed25519 signature covers (minus signature). */
+function pipelineSignable(receipt) {
+  if (!isObj(receipt)) return { ok: false, why: 'not a veridia pipeline receipt' };
+  if (receipt.kind !== 'veridia-pipeline') return { ok: false, why: 'not a veridia pipeline receipt' };
+  if (!isStr(receipt.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...receipt };
+  delete body.signature;
+  return { ok: true, payload: canon(body) };
+}
+
+/** verifyPipelineReceipt(r) — matches its own hash AND the composite verdict matches its steps. */
+function verifyPipelineReceipt(r) {
+  if (!isObj(r)) return { ok: false, why: 'not a veridia pipeline receipt' };
+  if (r.kind !== 'veridia-pipeline') return { ok: false, why: 'not a veridia pipeline receipt' };
+  if (!isStr(r.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...r };
+  delete body.hash;
+  delete body.signature;
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  if (h.hash !== r.hash) return { ok: true, valid: false, why: 'the receipt does not match its own fingerprint — it was changed after it was issued' };
+  if (!Array.isArray(r.steps)) return { ok: true, valid: false, why: 'the receipt has no steps' };
+  if (r.steps.length < MIN_STEPS) return { ok: true, valid: false, why: 'a pipeline needs at least ' + MIN_STEPS + ' steps' };
+  // the composite verdict must match the steps — a receipt claiming CLEAN over a FLAGGED step is a lie
+  let hasSplit = false, hasMajority = false;
+  for (const s of r.steps) {
+    if (!isObj(s)) return { ok: true, valid: false, why: 'a step is malformed' };
+    if (s.verdict === 'SPLIT') hasSplit = true;
+    if (s.verdict === 'MAJORITY') hasMajority = true;
+  }
+  const expected = hasSplit ? 'FLAGGED' : (hasMajority ? 'MAJORITY' : 'CLEAN');
+  if (r.verdict !== expected) return { ok: true, valid: false, why: 'the pipeline verdict does not match its steps' };
+  return { ok: true, valid: true, why: 'pipeline intact' };
+}
 // ⟦KERNEL-END⟧
 
 const $ = (id) => document.getElementById(id);
@@ -595,7 +700,68 @@ $('dlReceipt').addEventListener('click', async () => {
   $('dlMsg').innerHTML = (v.valid ? '✓ ' : '⚠ ') + 'Downloaded <b>veridia-crosscheck.json</b> — ' + (signed ? 'signed and ' : '') + 'tamper-evident. It proves the panel was <b>independent</b> and how it voted — not that the answer is true.';
 });
 
-// ── verify a received receipt ──────────────────────────────────────────────────────────────────────
+// ── the tetrahedron: compose a pipeline of cross-checks (demo) ───────────────────────────────────────
+const PFPS = ['llama3.2:1b#a1', 'qwen2.5:0.5b#b2', 'gemma2:2b#c3'];
+function panelReceipt(seed, answers){
+  const nodes = PFPS.map((fp, i) => ({ fingerprint: fp, receiptHash: sha256('r' + seed + i).hash, answer: answers[i] }));
+  return crosscheckReceipt({ taskHash: sha256('task-' + seed).hash, createdAt: new Date().toISOString(), nodes });
+}
+let lastPipe = null;
+function runPipe(kind){
+  const out = $('pipeOut');
+  const s1 = panelReceipt('extract', [ { supplier:'ACME Ltd', total:654 }, { supplier:'ACME Ltd', total:654 }, { supplier:'ACME Ltd', total:654 } ]);
+  const seam = sha256(canon(s1.receipt.accepted)).hash;
+  let s2, inputHash = seam;
+  if (kind === 'clean') s2 = panelReceipt('classify', [ {vat:'standard',rate:20},{vat:'standard',rate:20},{vat:'standard',rate:20} ]);
+  else if (kind === 'flag') s2 = panelReceipt('classify', [ {vat:'standard'},{vat:'reduced'},{vat:'zero'} ]);      // 3-way split
+  else { s2 = panelReceipt('classify', [ {vat:'standard',rate:20},{vat:'standard',rate:20},{vat:'standard',rate:20} ]); inputHash = sha256('a different input entirely').hash; }
+  const built = composePipeline([
+    { name: 'extract', receipt: s1.receipt, inputHash: null },
+    { name: 'classify', receipt: s2.receipt, inputHash },
+  ], new Date().toISOString());
+  out.classList.remove('hidden');
+  if (!built.ok){ out.innerHTML = '<span class="pill bad" style="display:inline-block">✗ ' + esc(built.why) + '</span><p class="note" style="margin-top:10px">A broken seam or an invalid step cannot issue a pipeline receipt at all — the process is not trustworthy, so there is nothing to sign.</p>'; lastPipe = null; out.scrollIntoView({behavior:'smooth',block:'start'}); return; }
+  lastPipe = built.receipt;
+  renderPipe(built.receipt);
+}
+function renderPipe(r){
+  const out = $('pipeOut');
+  const col = r.verdict === 'CLEAN' ? 'var(--veri)' : (r.verdict === 'MAJORITY' ? 'var(--gold)' : 'var(--bad)');
+  const bg = r.verdict === 'CLEAN' ? 'rgba(91,214,166,.10)' : (r.verdict === 'MAJORITY' ? 'rgba(217,164,65,.10)' : 'rgba(224,106,95,.10)');
+  let h = '<div class="verdict-big" style="color:' + col + ';background:' + bg + '">△ PIPELINE ' + r.verdict + '</div>';
+  h += '<table class="adj" style="margin-top:12px"><thead><tr><th>step</th><th>cross-check</th><th>escalated</th><th>chained from</th></tr></thead><tbody>';
+  r.steps.forEach((s, i) => {
+    h += '<tr class="' + (s.verdict === 'SPLIT' ? 'esc' : '') + '"><td><b style="color:var(--cream)">' + esc(s.name) + '</b></td>'
+      + '<td class="' + verdictClass(s.verdict) + '">' + s.verdict + '</td>'
+      + '<td>' + (s.escalate.length ? esc(s.escalate.join(', ')) : '—') + '</td>'
+      + '<td>' + (i === 0 ? '<span class="muted">(first step)</span>' : '✓ prev step’s accepted output') + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  if (r.verdict === 'FLAGGED') h += '<p class="note">A step split a field — the process continues on what the panels agreed, and a human resolves the flagged field. Nothing agreed is discarded, nothing uncertain is hidden.</p>';
+  h += '<div class="cta-row" style="margin-top:14px"><button class="btn veri" id="dlPipe">⤓ Download signed pipeline receipt</button></div><p id="pipeDl" class="note"></p>';
+  out.innerHTML = h;
+  $('dlPipe').addEventListener('click', dlPipe);
+  out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+async function dlPipe(){
+  if (!lastPipe) return;
+  let receipt = lastPipe, signed = false;
+  try {
+    const kp = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+    const payload = new TextEncoder().encode(pipelineSignable(receipt).payload);
+    const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, kp.privateKey, payload));
+    const pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+    receipt = { ...receipt, signature: { alg: 'Ed25519', pub: toHex(pub), sig: toHex(sig) } };
+    signed = true;
+  } catch (e) { /* no Ed25519 — the self-hash still makes it tamper-evident */ }
+  download(JSON.stringify(receipt, null, 2), 'veridia-pipeline.json');
+  $('pipeDl').innerHTML = (verifyPipelineReceipt(receipt).valid ? '✓ ' : '⚠ ') + 'Downloaded <b>veridia-pipeline.json</b> — ' + (signed ? 'signed and ' : '') + 'tamper-evident. It chains the steps’ cross-checks and proves the process was verified and correctly linked — not that the final answer is true.';
+}
+$('pipeClean').addEventListener('click', () => runPipe('clean'));
+$('pipeFlag').addEventListener('click', () => runPipe('flag'));
+$('pipeBroken').addEventListener('click', () => runPipe('broken'));
+
+// ── verify a received receipt (cross-check OR pipeline) ───────────────────────────────────────────────
 const dz = $('dropZone');
 dz.addEventListener('click', () => $('vFile').click());
 dz.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('vFile').click(); } });
@@ -608,13 +774,14 @@ function readFile(file){ const r = new FileReader(); r.onload = () => verifyText
 async function verifyText(text){
   let receipt;
   try { receipt = JSON.parse(text); } catch { vVerdict(false, 'That is not valid JSON — drop or paste the whole receipt.', null); return; }
-  const v = verifyCrosscheckReceipt(receipt);
-  if (!v.ok){ vVerdict(false, 'This is not a Veridia cross-check receipt.', null); return; }
+  const isPipe = receipt && receipt.kind === 'veridia-pipeline';
+  const v = isPipe ? verifyPipelineReceipt(receipt) : verifyCrosscheckReceipt(receipt);
+  if (!v.ok){ vVerdict(false, 'This is not a Veridia receipt.', null); return; }
   if (!v.valid){ vVerdict(false, 'CHANGED — ' + v.why, receipt); return; }
   let sig = 'unsigned';
   if (receipt.signature && receipt.signature.alg === 'Ed25519' && typeof receipt.signature.pub === 'string'){
     try {
-      const sp = crosscheckSignable(receipt);
+      const sp = isPipe ? pipelineSignable(receipt) : crosscheckSignable(receipt);
       const pub = await crypto.subtle.importKey('raw', fromHex(receipt.signature.pub), { name: 'Ed25519' }, false, ['verify']);
       const ok = await crypto.subtle.verify({ name: 'Ed25519' }, pub, fromHex(receipt.signature.sig), new TextEncoder().encode(sp.payload));
       sig = ok ? 'valid' : 'invalid';
@@ -629,6 +796,9 @@ function vVerdict(good, headline, receipt, sig){
     h += '<div class="kvline">Verdict: <b>' + esc(receipt.verdict) + '</b>' + (Array.isArray(receipt.escalate) && receipt.escalate.length ? ' · escalated: <b>' + receipt.escalate.map(esc).join(', ') + '</b>' : '') + '</div>';
     h += '<div class="kvline">Panel (independent): <b>' + (Array.isArray(receipt.panel) ? receipt.panel.map((p) => esc(p.fingerprint)).join(' · ') : '?') + '</b></div>';
     if (good) h += '<div class="kvline" style="margin-top:8px">' + (sig === 'valid' ? 'Signature valid — unedited since signing.' : (sig === 'unsigned' ? 'No signature, but the verdicts match the receipt’s own fingerprint (unedited).' : 'Signature uncheckable here, but the verdicts match the fingerprint.')) + ' It proves independent agreement, <b>not truth</b>.</div>';
+  } else if (receipt && receipt.kind === 'veridia-pipeline'){
+    h += '<div class="kvline">Pipeline verdict: <b>' + esc(receipt.verdict) + '</b> · ' + (Array.isArray(receipt.steps) ? receipt.steps.length : '?') + ' steps: <b>' + (Array.isArray(receipt.steps) ? receipt.steps.map((s) => esc(s.name) + ' (' + esc(s.verdict) + ')').join(' → ') : '?') + '</b></div>';
+    if (good) h += '<div class="kvline" style="margin-top:8px">' + (sig === 'valid' ? 'Signature valid — unedited since signing.' : 'The verdicts match the receipt’s own fingerprint (unedited).') + ' It proves the process was cross-checked and correctly chained, <b>not that the answer is true</b>.</div>';
   }
   h += '</div>';
   $('vOut').innerHTML = h;

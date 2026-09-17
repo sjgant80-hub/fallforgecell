@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  MIN_PANEL,
+  MIN_PANEL, MIN_STEPS,
   sha256, canon, normValue, agree,
   panelIndependent, adjudicateField, adjudicate,
   crosscheckReceipt, crosscheckSignable, verifyCrosscheckReceipt,
+  composePipeline, pipelineSignable, verifyPipelineReceipt,
 } from './kernel.mjs';
 
 test('sha256 + canon: vendored proven pair still holds (FIPS-pinned, order-blind)', () => {
@@ -168,4 +169,90 @@ test('crosscheckReceipt: verifiable receipt; refuses clones; catches tamper + fa
   assert.equal(verifyCrosscheckReceipt({ kind: 'other', hash: 'x' }).ok, false);
   assert.equal(verifyCrosscheckReceipt({ kind: 'veridia-crosscheck' }).ok, false);   // no hash
   assert.equal(crosscheckSignable({ kind: 'veridia-crosscheck' }).ok, false);        // no hash
+});
+
+// ── the tetrahedron: compose cross-checks into a verified pipeline ────────────────────────────────
+function stepReceipt(seed, answer){
+  const nodes = FPS.map((fp, i) => ({ fingerprint: fp, receiptHash: sha256('r' + seed + i).hash, answer }));
+  return crosscheckReceipt({ taskHash: sha256('task-' + seed).hash, createdAt: 't', nodes }).receipt;
+}
+test('composePipeline: binds each step to the prior accepted output; composite verdict; refuses a broken seam', () => {
+  const r1 = stepReceipt('extract', { supplier: 'ACME', total: 100 });
+  const r2 = stepReceipt('classify', { vat: 'standard', rate: 20 });
+  const seam = sha256(canon(r1.accepted)).hash;   // what step 2 must have consumed
+  const good = composePipeline([
+    { name: 'extract', receipt: r1, inputHash: null },
+    { name: 'classify', receipt: r2, inputHash: seam },
+  ], '2026-09-18T00:00:00Z');
+  assert.equal(good.ok, true);
+  assert.equal(good.receipt.kind, 'veridia-pipeline');
+  assert.equal(good.receipt.verdict, 'CLEAN');       // both steps unanimous
+  assert.equal(good.receipt.steps.length, 2);
+  assert.equal(good.receipt.hash.length, 64);
+  assert.equal(verifyPipelineReceipt(good.receipt).valid, true);
+
+  // a broken seam (wrong inputHash) is refused — you cannot swap step 2's input
+  const broken = composePipeline([{ name: 'extract', receipt: r1, inputHash: null }, { name: 'classify', receipt: r2, inputHash: sha256('wrong').hash }], 't');
+  assert.equal(broken.ok, false);
+  assert.ok(broken.why.includes('seam'), 'the broken seam is named, got: ' + broken.why);
+  assert.ok(broken.why.includes('consume step 1'), 'the seam names the right predecessor step 1 (kills n-1 -> n+1), got: ' + broken.why);
+  // the first step must NOT declare an input
+  assert.equal(composePipeline([{ name: 'extract', receipt: r1, inputHash: 'x' }, { name: 'classify', receipt: r2, inputHash: seam }], 't').ok, false);
+
+  // FLAGGED: a step whose panel SPLIT → pipeline still issues a receipt, marked FLAGGED
+  const rSplit = crosscheckReceipt({ taskHash: sha256('t2').hash, createdAt: 't', nodes: [
+    { fingerprint: 'm1#a', receiptHash: sha256('a').hash, answer: { cat: 'x' } },
+    { fingerprint: 'm2#b', receiptHash: sha256('b').hash, answer: { cat: 'y' } },
+    { fingerprint: 'm3#c', receiptHash: sha256('c').hash, answer: { cat: 'z' } },
+  ] }).receipt;
+  assert.equal(rSplit.verdict, 'SPLIT');
+  const flagged = composePipeline([{ name: 'extract', receipt: r1, inputHash: null }, { name: 'classify', receipt: rSplit, inputHash: seam }], 't');
+  assert.equal(flagged.ok, true);
+  assert.equal(flagged.receipt.verdict, 'FLAGGED');
+  assert.equal(verifyPipelineReceipt(flagged.receipt).valid, true);
+
+  // MAJORITY: a step that reached only a majority (no split) → pipeline MAJORITY
+  const rMaj = crosscheckReceipt({ taskHash: sha256('t3').hash, createdAt: 't', nodes: [
+    { fingerprint: 'm1#a', receiptHash: sha256('a').hash, answer: { k: 'v' } },
+    { fingerprint: 'm2#b', receiptHash: sha256('b').hash, answer: { k: 'v' } },
+    { fingerprint: 'm3#c', receiptHash: sha256('c').hash, answer: { k: 'w' } },
+  ] }).receipt;
+  assert.equal(rMaj.verdict, 'MAJORITY');
+  const maj = composePipeline([{ name: 'a', receipt: r1, inputHash: null }, { name: 'b', receipt: rMaj, inputHash: seam }], 't');
+  assert.equal(maj.receipt.verdict, 'MAJORITY');
+
+  // refusals
+  assert.equal(composePipeline('nope', 't').ok, false);
+  assert.equal(composePipeline([{ name: 'x', receipt: r1, inputHash: null }], 't').ok, false);       // < MIN_STEPS
+  const badStep2 = composePipeline([{ name: 'x', receipt: r1, inputHash: null }, { name: 'y', receipt: { kind: 'other' }, inputHash: seam }], 't'); // invalid step 2 receipt
+  assert.equal(badStep2.ok, false);
+  assert.ok(badStep2.why.includes('step 2'), 'the bad second step is named step 2 (kills i+1 -> i-1), got: ' + badStep2.why);
+  assert.equal(composePipeline([{ name: '', receipt: r1, inputHash: null }, { name: 'y', receipt: r2, inputHash: seam }], 't').ok, false);   // empty name
+  assert.equal(composePipeline([{ name: 'x', receipt: r1, inputHash: null }, { name: 'y', receipt: r2, inputHash: seam }], '').ok, false);   // empty createdAt
+  assert.equal(MIN_STEPS, 2);
+});
+
+test('verifyPipelineReceipt: catches tamper and a lying composite verdict', () => {
+  const r1 = stepReceipt('e', { a: 1 }); const r2 = stepReceipt('c', { b: 2 });
+  const p = composePipeline([{ name: 'e', receipt: r1, inputHash: null }, { name: 'c', receipt: r2, inputHash: sha256(canon(r1.accepted)).hash }], 't').receipt;
+  assert.equal(verifyPipelineReceipt(p).valid, true);
+  assert.equal(verifyPipelineReceipt({ ...p, createdAt: 'x' }).valid, false);   // tamper → hash mismatch
+  // forge: claim CLEAN while a step is secretly SPLIT, with a matching hash → the invariant catches it
+  const body = { ...p }; delete body.hash; delete body.signature;
+  body.steps = body.steps.map((s, i) => (i === 0 ? { ...s, verdict: 'SPLIT' } : s));   // verdict stays CLEAN, a step is SPLIT
+  const forged = { ...body, hash: sha256(canon(body)).hash };
+  const v = verifyPipelineReceipt(forged);
+  assert.equal(v.valid, false);
+  assert.ok(v.why.includes('verdict'), 'the lie is named, got: ' + v.why);
+  const s = pipelineSignable(p);
+  assert.equal(s.payload.includes('"signature"'), false);
+  assert.equal(s.payload.includes(p.hash), true);
+  assert.equal(verifyPipelineReceipt({ kind: 'other', hash: 'x' }).ok, false);
+  assert.equal(pipelineSignable({ kind: 'veridia-pipeline' }).ok, false);   // no hash
+  // the split steps guard: non-array steps and a one-step "pipeline" are both invalid (kills the split guard)
+  const pbody = { ...p }; delete pbody.hash; delete pbody.signature;
+  const noSteps = { ...pbody, steps: 'nope' }; noSteps.hash = sha256(canon(noSteps)).hash;
+  assert.equal(verifyPipelineReceipt(noSteps).valid, false);
+  const oneStep = { ...pbody, steps: [pbody.steps[0]] }; oneStep.hash = sha256(canon(oneStep)).hash;
+  assert.equal(verifyPipelineReceipt(oneStep).valid, false);
 });
