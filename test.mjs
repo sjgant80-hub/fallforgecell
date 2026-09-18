@@ -7,6 +7,7 @@ import {
   crosscheckReceipt, crosscheckSignable, verifyCrosscheckReceipt,
   composePipeline, pipelineSignable, verifyPipelineReceipt,
   merkleRoot, composeDepartment, departmentSignable, verifyDepartmentReceipt,
+  auditDepartment, auditSignable, verifyAuditReceipt,
 } from './kernel.mjs';
 
 test('sha256 + canon: vendored proven pair still holds (FIPS-pinned, order-blind)', () => {
@@ -422,4 +423,193 @@ test('verifyDepartmentReceipt: catches tamper, a lying verdict, and a forged com
   const b3 = { ...d }; delete b3.hash; delete b3.signature;
   const shortCharter = { ...b3, expected: ['a'] }; shortCharter.hash = sha256(canon(shortCharter)).hash;
   assert.equal(verifyDepartmentReceipt(shortCharter).valid, false);
+});
+
+// ── the octahedron: an independent audit of a department — the cube's dual ────────────────────────
+test('auditDepartment: CONFIRMED when every unit matches its real receipt and the Merkle root recomputes', () => {
+  const u1 = pipeUnit('oa1', { x: 1 }, 'oa2', { y: 2 });   // CLEAN pipeline unit
+  const u2 = stepReceipt('occ', { z: 3 });                 // UNANIMOUS cross-check unit
+  const d = composeDepartment({ name: 'invoices', expected: ['extract', 'audit'], units: [{ name: 'extract', receipt: u1 }, { name: 'audit', receipt: u2 }], createdAt: 't' }).receipt;
+
+  const good = auditDepartment({ department: d, receipts: [u1, u2], createdAt: '2026-09-18T00:00:00Z' });
+  assert.equal(good.ok, true);
+  assert.equal(good.receipt.kind, 'veridia-audit');
+  assert.equal(good.receipt.verdict, 'CONFIRMED');
+  assert.deepEqual(good.receipt.findings, []);
+  assert.deepEqual(good.receipt.unverifiable, []);
+  assert.equal(good.receipt.recomputedMerkleRoot, d.merkleRoot);
+  assert.equal(good.receipt.departmentHash, d.hash);
+  assert.equal(good.receipt.hash.length, 64);
+  assert.equal(verifyAuditReceipt(good.receipt).valid, true);
+
+  // extra, uninvolved receipts in the pool don't hurt — matching is by hash, not by position
+  const decoy = stepReceipt('decoy', { w: 9 });
+  const withDecoy = auditDepartment({ department: d, receipts: [decoy, u1, u2], createdAt: 't' });
+  assert.equal(withDecoy.receipt.verdict, 'CONFIRMED');
+});
+
+test('auditDepartment: UNVERIFIABLE when a claimed unit\'s real receipt was never supplied', () => {
+  const u1 = pipeUnit('ub1', { x: 1 }, 'ub2', { y: 2 });
+  const u2 = stepReceipt('ubcc', { z: 3 });
+  const d = composeDepartment({ name: 'invoices', expected: ['extract', 'audit'], units: [{ name: 'extract', receipt: u1 }, { name: 'audit', receipt: u2 }], createdAt: 't' }).receipt;
+
+  const r = auditDepartment({ department: d, receipts: [u1], createdAt: 't' });   // u2 withheld
+  assert.equal(r.ok, true);
+  assert.equal(r.receipt.verdict, 'UNVERIFIABLE');
+  assert.deepEqual(r.receipt.findings, []);
+  assert.deepEqual(r.receipt.unverifiable, ['audit']);
+  assert.equal(verifyAuditReceipt(r.receipt).valid, true);
+
+  // no receipts at all — every unit is unverifiable, none is a false-positive DISCREPANT
+  const none = auditDepartment({ department: d, receipts: [], createdAt: 't' });
+  assert.equal(none.receipt.verdict, 'UNVERIFIABLE');
+  assert.deepEqual(none.receipt.unverifiable.sort(), ['audit', 'extract']);
+});
+
+test('auditDepartment: catches a unit-verdict lie that a WORSE sibling hides from the department\'s own self-check', () => {
+  // this is the load-bearing case: unit 'a' is truthfully CLEAN, unit 'b' is truthfully FLAGGED, so the
+  // department's real worst-field verdict is FLAGGED either way. Forging unit 'a's row from CLEAN to
+  // MAJORITY does NOT change the department's own top-level verdict — verifyDepartmentReceipt's severity
+  // invariant recomputes the SAME 'FLAGGED' from the (partially forged) rows and reports the receipt
+  // valid. Only matching unit 'a' back to its real receipt exposes the lie.
+  const uA = pipeUnit('wa1', { x: 1 }, 'wa2', { y: 2 });   // real verdict: CLEAN
+  const uB = flaggedPipeUnit();                             // real verdict: FLAGGED
+  const d = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: uA }, { name: 'b', receipt: uB }], createdAt: 't' }).receipt;
+  assert.equal(d.verdict, 'FLAGGED');   // sanity: b already dominates
+
+  const body = { ...d }; delete body.hash; delete body.signature;
+  body.units = body.units.map((u) => (u.name === 'a' ? { ...u, verdict: 'MAJORITY' } : u));   // the lie
+  const forged = { ...body, hash: sha256(canon(body)).hash };
+  assert.equal(forged.verdict, 'FLAGGED');                          // unchanged — b still dominates
+  assert.equal(verifyDepartmentReceipt(forged).valid, true);        // ⚑ the self-check is fooled
+
+  const audit = auditDepartment({ department: forged, receipts: [uA, uB], createdAt: 't' });
+  assert.equal(audit.ok, true);
+  assert.equal(audit.receipt.verdict, 'DISCREPANT');                 // the audit is NOT fooled
+  assert.ok(audit.receipt.findings.some((f) => f.includes('unit 1') && f.includes("'a'") && f.includes('MAJORITY') && f.includes('CLEAN')),
+    'the lie is named with the unit, the claim, and the truth, got: ' + JSON.stringify(audit.receipt.findings));
+  assert.equal(verifyAuditReceipt(audit.receipt).valid, true);
+});
+
+test('auditDepartment: catches a Merkle root that was never derived from its own units', () => {
+  const u1 = pipeUnit('mr1', { x: 1 }, 'mr2', { y: 2 });
+  const u2 = stepReceipt('mrcc', { z: 3 });
+  const d = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: u1 }, { name: 'b', receipt: u2 }], createdAt: 't' }).receipt;
+
+  const body = { ...d }; delete body.hash; delete body.signature;
+  body.merkleRoot = sha256('a completely unrelated root').hash;   // self-consistent, but never derived from the leaves
+  const forged = { ...body, hash: sha256(canon(body)).hash };
+  assert.equal(verifyDepartmentReceipt(forged).valid, true);      // ⚑ verifyDepartmentReceipt never checks this
+
+  const audit = auditDepartment({ department: forged, receipts: [u1, u2], createdAt: 't' });
+  assert.equal(audit.receipt.verdict, 'DISCREPANT');
+  assert.ok(audit.receipt.findings.some((f) => f.includes('Merkle root')), 'the forged root is named, got: ' + JSON.stringify(audit.receipt.findings));
+  assert.equal(audit.receipt.recomputedMerkleRoot, d.merkleRoot);  // recomputed from the REAL units, matches the untampered original
+});
+
+test('auditDepartment: catches a kind lie and a fully self-consistent department that fails its own self-check', () => {
+  const u1 = pipeUnit('kl1', { x: 1 }, 'kl2', { y: 2 });    // a real pipeline
+  const u2 = stepReceipt('klcc', { z: 3 });                  // a real cross-check
+  const d = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: u1 }, { name: 'b', receipt: u2 }], createdAt: 't' }).receipt;
+
+  const body = { ...d }; delete body.hash; delete body.signature;
+  body.units = body.units.map((u) => (u.name === 'a' ? { ...u, kind: 'veridia-crosscheck' } : u));   // lies about u1's kind
+  const forged = { ...body, hash: sha256(canon(body)).hash };
+  const audit = auditDepartment({ department: forged, receipts: [u1, u2], createdAt: 't' });
+  assert.equal(audit.receipt.verdict, 'DISCREPANT');
+  assert.ok(audit.receipt.findings.some((f) => f.includes('kind')), 'the kind lie is named, got: ' + JSON.stringify(audit.receipt.findings));
+
+  // a department that fails its OWN self-check (tampered createdAt, hash no longer matches) is the
+  // top finding — auditDepartment does not refuse, it names the self-check failure and moves on
+  const untouched = auditDepartment({ department: { ...d, createdAt: 'tampered' }, receipts: [u1, u2], createdAt: 't' });
+  assert.equal(untouched.ok, true);
+  assert.equal(untouched.receipt.verdict, 'DISCREPANT');
+  assert.ok(untouched.receipt.findings.some((f) => f.includes('does not verify on its own')), 'got: ' + JSON.stringify(untouched.receipt.findings));
+
+  // department.units forced to a non-array (self-consistently rehashed) is named too, not a crash
+  const b2 = { ...d }; delete b2.hash; delete b2.signature;
+  b2.units = 'nope';
+  const noUnits = { ...b2, hash: sha256(canon(b2)).hash };
+  const auditNoUnits = auditDepartment({ department: noUnits, receipts: [u1, u2], createdAt: 't' });
+  assert.equal(auditNoUnits.ok, true);
+  assert.equal(auditNoUnits.receipt.verdict, 'DISCREPANT');
+  assert.ok(auditNoUnits.receipt.findings.some((f) => f.includes('no units array')), 'got: ' + JSON.stringify(auditNoUnits.receipt.findings));
+});
+
+test('auditDepartment: refuses only on malformed input, never on a real gap', () => {
+  const u1 = pipeUnit('rf1', { x: 1 }, 'rf2', { y: 2 });
+  const u2 = stepReceipt('rfcc', { z: 3 });
+  const d = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: u1 }, { name: 'b', receipt: u2 }], createdAt: 't' }).receipt;
+
+  assert.equal(auditDepartment('nope').ok, false);
+  assert.equal(auditDepartment({ department: 'nope', receipts: [], createdAt: 't' }).ok, false);
+  assert.equal(auditDepartment({ department: { kind: 'veridia-pipeline' }, receipts: [], createdAt: 't' }).ok, false);   // wrong kind
+  assert.equal(auditDepartment({ department: d, receipts: [], createdAt: '' }).ok, false);      // empty createdAt
+  assert.equal(auditDepartment({ department: d, receipts: [], createdAt: 7 }).ok, false);       // non-string createdAt
+  assert.equal(auditDepartment({ department: d, receipts: 'nope', createdAt: 't' }).ok, false); // receipts not a list
+  // a bad SECOND receipt is named "receipt 2" (kills the n = i + 1 counter)
+  const badSecond = auditDepartment({ department: d, receipts: [u1, 'nope', u2], createdAt: 't' });
+  assert.equal(badSecond.ok, false);
+  assert.ok(badSecond.why.includes('receipt 2'), 'the bad second receipt is named, got: ' + badSecond.why);
+  // a department too malformed to even hash-check (no hash field at all) propagates the refusal
+  assert.equal(auditDepartment({ department: { kind: 'veridia-department' }, receipts: [], createdAt: 't' }).ok, false);
+});
+
+test('auditDepartment: a zero-unit department is CONFIRMED (empty, not a Merkle error), and a malformed unit inside a real units array is named by position', () => {
+  // a zero-unit department (charter unmet, so INCOMPLETE, but still a self-consistent receipt — same
+  // as the cube's own "empty" test) has leaves.length === 0: recomputedMerkleRoot must stay null and
+  // NOT attempt merkleRoot([]), which would itself refuse and wrongly report a Merkle-recompute finding
+  const empty = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [], createdAt: 't' }).receipt;
+  assert.equal(empty.verdict, 'INCOMPLETE');
+  assert.equal(empty.merkleRoot, null);
+  const auditEmpty = auditDepartment({ department: empty, receipts: [], createdAt: 't' });
+  assert.equal(auditEmpty.ok, true);
+  assert.equal(auditEmpty.receipt.verdict, 'CONFIRMED');
+  assert.deepEqual(auditEmpty.receipt.findings, []);
+  assert.equal(auditEmpty.receipt.recomputedMerkleRoot, null);
+
+  // a malformed SECOND unit (missing its receipt hash) inside an otherwise-real units array is named
+  // "unit 2" — from the Merkle-leaves pass specifically, not the later unit-matching pass
+  const u1 = pipeUnit('mz1', { x: 1 }, 'mz2', { y: 2 });
+  const u2 = stepReceipt('mzcc', { z: 3 });
+  const d = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: u1 }, { name: 'b', receipt: u2 }], createdAt: 't' }).receipt;
+  const body = { ...d }; delete body.hash; delete body.signature;
+  body.units = body.units.map((u, i) => (i === 1 ? { ...u, receiptHash: 7 } : u));   // 'b' loses its (string) receipt hash
+  const forged = { ...body, hash: sha256(canon(body)).hash };
+  const audit = auditDepartment({ department: forged, receipts: [u1, u2], createdAt: 't' });
+  assert.equal(audit.receipt.verdict, 'DISCREPANT');
+  assert.ok(audit.receipt.findings.some((f) => f.includes('unit 2') && f.includes('no receipt hash')),
+    'the malformed second unit is named by position, got: ' + JSON.stringify(audit.receipt.findings));
+});
+
+test('verifyAuditReceipt: catches tamper and a lying verdict over hidden findings', () => {
+  const u1 = pipeUnit('va1', { x: 1 }, 'va2', { y: 2 });
+  const u2 = stepReceipt('vacc', { z: 3 });
+  const d = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: u1 }, { name: 'b', receipt: u2 }], createdAt: 't' }).receipt;
+  const a = auditDepartment({ department: d, receipts: [u1, u2], createdAt: 't' }).receipt;
+  assert.equal(verifyAuditReceipt(a).valid, true);
+  assert.equal(verifyAuditReceipt({ ...a, createdAt: 'x' }).valid, false);   // tamper → hash mismatch
+
+  // forge: claim CONFIRMED while findings secretly holds an entry, re-match the hash → the invariant catches it
+  const body = { ...a }; delete body.hash; delete body.signature;
+  body.findings = ['a hidden lie'];
+  body.verdict = 'CONFIRMED';
+  const forged = { ...body, hash: sha256(canon(body)).hash };
+  const v = verifyAuditReceipt(forged);
+  assert.equal(v.valid, false);
+  assert.ok(v.why.includes('verdict'), 'the lie is named, got: ' + v.why);
+
+  const s = auditSignable(a);
+  assert.equal(s.payload.includes('"signature"'), false);
+  assert.equal(s.payload.includes(a.hash), true);
+  assert.equal(auditSignable({ ...a, signature: { alg: 'Ed25519' } }).payload, s.payload);
+  assert.equal(verifyAuditReceipt({ kind: 'other', hash: 'x' }).ok, false);
+  assert.equal(verifyAuditReceipt({ kind: 'veridia-audit' }).ok, false);   // no hash
+  assert.equal(auditSignable({ kind: 'veridia-audit' }).ok, false);        // no hash
+  // the split guards on verify: non-array findings/unverifiable are both invalid (kills the split guard)
+  const pbody = { ...a }; delete pbody.hash; delete pbody.signature;
+  const noFindings = { ...pbody, findings: 'nope' }; noFindings.hash = sha256(canon(noFindings)).hash;
+  assert.equal(verifyAuditReceipt(noFindings).valid, false);
+  const noUnverifiable = { ...pbody, unverifiable: 'nope' }; noUnverifiable.hash = sha256(canon(noUnverifiable)).hash;
+  assert.equal(verifyAuditReceipt(noUnverifiable).valid, false);
 });

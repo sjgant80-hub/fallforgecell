@@ -128,6 +128,7 @@
     <a href="#check">Cross-check</a>
     <a href="#pipeline">Pipeline</a>
     <a href="#department">Department</a>
+    <a href="#audit">Audit</a>
     <a href="#how">How</a>
     <a href="#verify">Verify a receipt</a>
     <a href="#faq">FAQ</a>
@@ -206,6 +207,20 @@
   <p class="note"><b>CLEAN</b> — every unit agreed and the charter is met. <b>MAJORITY</b> — a unit needed a majority. <b>FLAGGED</b> — a unit escalated to a human. <b>INCOMPLETE</b> — a declared unit is missing, or an uninvited one turned up. It proves the department is complete, each unit verified, and nothing tampered — not that the combined output is true.</p>
 </div></section>
 
+<!-- THE OCTAHEDRON: AUDIT -->
+<section id="audit"><div class="wrap">
+  <div class="eyebrow">◈ The octahedron · an independent audit</div>
+  <h2 class="sec">The cube’s dual: don’t trust the department’s summary — check it against the real receipts.</h2>
+  <p class="sub">composeDepartment builds a department from real receipts and keeps its own summary of them — name, kind, verdict. verifyDepartmentReceipt then re-checks that summary against <b>itself</b>, which catches tampering but can’t catch a department that lied about a unit from the start, because it never sees the real receipt again. The octahedron is handed the department <b>and</b> the real receipts it claims to summarise, and matches every claim — by hash, never by name — back to the primary source. It also recomputes the Merkle root from the unit hashes, which the department’s own self-check never does at all.</p>
+  <div class="cta-row" style="margin-top:18px">
+    <button class="btn veri" id="auditConfirmed">Audit a real department</button>
+    <button class="btn ghost" id="auditLie">Demo: catch a lie the self-check misses</button>
+    <button class="btn ghost" id="auditGap">Demo: evidence withheld</button>
+  </div>
+  <div id="auditOut" class="card hidden" style="margin-top:16px;border-color:var(--veri)"></div>
+  <p class="note"><b>CONFIRMED</b> — every claimed unit matched its real receipt and the Merkle root recomputed clean. <b>UNVERIFIABLE</b> — every checked claim held, but at least one unit’s real receipt was never supplied. <b>DISCREPANT</b> — a claim didn’t match its real receipt, the root didn’t recompute, or the department failed its own self-check. It proves the department told the truth about the evidence it was given — not that the underlying work itself was correct.</p>
+</div></section>
+
 <!-- HOW -->
 <section id="how"><div class="wrap">
   <div class="eyebrow">In plain English</div>
@@ -243,6 +258,7 @@
     <details class="faq"><summary>Does a unanimous verdict mean it's true?</summary><p>No. It means three independent models agreed — strong evidence, but a unanimous panel can still be unanimously wrong. Veridia proves agreement and independence, not truth. Split fields escalate to a human.</p></details>
     <details class="faq"><summary>What does the signed receipt prove?</summary><p>It binds the panel (three distinct fingerprints + the receipt hashes chaining back to each node's scorecard), the per-field verdicts, and what escalated — tamper-evident, Ed25519-signable, re-verifiable offline. It proves the panel was independent and agreed; it does not certify truth.</p></details>
     <details class="faq"><summary>What's a "department", and how does it catch a missing process?</summary><p>A department rolls several already-verified units — pipelines and cross-checks — into one auditable whole, folding their fingerprints into a single Merkle root. It <b>declares the units it expects</b> up front, so if a process was quietly dropped the department is marked <b>INCOMPLETE</b> and the missing unit is named. A verified set of units proves each one was checked; only a declared charter proves none is missing.</p></details>
+    <details class="faq"><summary>What does the octahedron (the audit) catch that the department’s own check can’t?</summary><p>A department’s unit row is a <em>claim</em> about a real receipt, not the receipt itself. If one unit is already the worst in the department, a forged row can lie about a <em>better</em> unit’s verdict without changing the department’s top-level verdict at all — so verifyDepartmentReceipt, which only re-checks the receipt against itself, is fooled. The audit is handed the real receipts and matches every claim back to them by hash, never by name. It also recomputes the Merkle root from the unit hashes, which the department’s own self-check never does.</p></details>
     <details class="faq"><summary>How does this relate to FallForge Mint?</summary><p>FallForge Mint is the foundry — it mints one owned, proven, signed model for a task. Veridia is the next step: it takes three of those and cross-checks them so the composition is correct, not just safe. It consumes what the foundry makes; it never touches it.</p></details>
   </div>
 </div></section>
@@ -770,6 +786,167 @@ function verifyDepartmentReceipt(r) {
   if (r.verdict !== want) return { ok: true, valid: false, why: 'the department verdict does not match its units' };
   return { ok: true, valid: true, why: 'department intact' };
 }
+
+// ── THE OCTAHEDRON: an independent audit — the cube's dual ────────────────────────────────────────
+// The cube COMPOSES: given real receipts, it builds ONE department and trusts its own summary rows
+// (name, kind, receiptHash, verdict) because it derived them itself, in the same call, from those real
+// receipts. verifyDepartmentReceipt then re-checks that receipt against ITSELF — same hash, same
+// completeness arithmetic, same verdict severity — which catches tampering after the fact but cannot
+// catch a department that lied about its units from the start, because it never sees the real unit
+// receipts again, only the summary the department chose to keep.
+//
+// The octahedron is that gap, closed. Geometrically it is the cube's dual — 8 vertices/6 faces swap to
+// 6 vertices/8 faces, building-up swaps to breaking-down. Operationally: composeDepartment goes MANY
+// real receipts → ONE summarised receipt; auditDepartment goes ONE department receipt + the MANY real
+// receipts it claims to summarise → an independent verdict, re-derived from the primary sources, never
+// from the department's own say-so. Two concrete things it catches that verifyDepartmentReceipt cannot,
+// by construction, no matter how carefully it is written:
+//   1. verifyDepartmentReceipt never recomputes the Merkle root from the unit hashes — it only re-hashes
+//      the receipt body. A department can ship a merkleRoot that was never actually derived from its
+//      units and still pass its own self-check, as long as the stored root is internally consistent
+//      with the rest of the (also self-consistent) body. auditDepartment recomputes the root from the
+//      unit rows and compares.
+//   2. a department's unit row is a CLAIM about a real receipt, not the receipt itself. Nothing about
+//      self-consistency stops a forged row from lying about ONE unit's verdict as long as the overall
+//      department verdict — the WORST field across all units — happens not to change (a lie hiding
+//      behind a genuinely worse sibling). Handed the real receipts, auditDepartment matches each row to
+//      its real receipt BY HASH (the only honest link — never by caller-supplied name or position, both
+//      of which a forger controls) and confirms kind and verdict actually match what that receipt says.
+//
+// Kar's honest rule, a fourth time, verbatim from the pattern that built the triangle/tetra/cube: an
+// auditor not HANDED a unit's real receipt must say so — UNVERIFIABLE, never assumed to match. Silence
+// there would be a worse lie than the one this organ exists to catch. So the verdict has three tiers,
+// worst to best: DISCREPANT (a claim was checked against its real receipt and did not match, the Merkle
+// root did not recompute, or the department fails its own self-check) beats UNVERIFIABLE (every claim
+// checked so far held, but at least one unit's real receipt was never supplied) beats CONFIRMED (every
+// claimed unit matched its real receipt — kind, verdict — and the Merkle root recomputed clean). Refuses
+// only on input too malformed to attempt an audit at all; a real mismatch or an evidence gap is a
+// VERDICT, always named, never hidden.
+function auditDepartment(input) {
+  if (!isObj(input)) return { ok: false, why: 'auditDepartment takes an object' };
+  const department = input.department;
+  const receipts = input.receipts;
+  const createdAt = input.createdAt;
+  if (!isObj(department)) return { ok: false, why: 'auditDepartment needs a department receipt' };
+  if (department.kind !== 'veridia-department') return { ok: false, why: 'not a veridia department receipt — nothing to audit' };
+  if (!isStr(createdAt)) return { ok: false, why: 'the audit needs a createdAt timestamp' };
+  if (createdAt.length === 0) return { ok: false, why: 'the audit needs a non-empty createdAt timestamp' };
+  if (!Array.isArray(receipts)) return { ok: false, why: 'receipts must be a list of the actual unit receipts' };
+  for (const [i, rc] of receipts.entries()) {
+    const n = i + 1;
+    if (!isObj(rc)) return { ok: false, why: 'receipt ' + n + ' must be an object' };
+  }
+
+  const findings = [];
+  const unverifiable = [];
+
+  // the department's own self-check comes first — if it fails, that IS the top finding, named plainly
+  const selfCheck = verifyDepartmentReceipt(department);
+  if (!selfCheck.ok) return selfCheck;   // too malformed to even attempt (no hash, wrong kind, etc.)
+  if (!selfCheck.valid) findings.push('the department receipt does not verify on its own: ' + selfCheck.why);
+
+  // recompute the Merkle root independently from the department's own unit rows — verifyDepartmentReceipt
+  // never does this, so a self-consistent-but-fabricated root would otherwise sail through unnoticed
+  let recomputedMerkleRoot = null;
+  if (!Array.isArray(department.units)) {
+    findings.push('the department has no units array — the Merkle root cannot be recomputed');
+  } else {
+    const leaves = [];
+    let leavesOk = true;
+    for (const [i, u] of department.units.entries()) {
+      const n = i + 1;
+      if (!isObj(u)) { findings.push('unit ' + n + ' is malformed — the Merkle root cannot be recomputed'); leavesOk = false; continue; }
+      if (!isStr(u.receiptHash)) { findings.push('unit ' + n + " ('" + (isStr(u.name) ? u.name : '?') + "') has no receipt hash — the Merkle root cannot be recomputed"); leavesOk = false; continue; }
+      leaves.push(u.receiptHash);
+    }
+    if (leavesOk) {
+      if (leaves.length > 0) {
+        const mr = merkleRoot(leaves.slice().sort());
+        if (!mr.ok) findings.push('the Merkle root could not be recomputed: ' + mr.why);
+        else recomputedMerkleRoot = mr.root;
+      }
+      const claimedRoot = (department.merkleRoot === undefined) ? null : department.merkleRoot;
+      if (recomputedMerkleRoot !== claimedRoot) findings.push("the department's Merkle root does not match what its own units hash to — a forged or corrupted rollup");
+    }
+  }
+
+  // match each claimed unit to its REAL receipt by hash (never by name — a forger controls the name)
+  // and independently re-verify it, rather than trusting the department's summary row
+  const byHash = new Map();
+  for (const rc of receipts) {
+    if (isStr(rc.hash)) byHash.set(rc.hash, rc);
+  }
+  if (Array.isArray(department.units)) {
+    for (const [i, u] of department.units.entries()) {
+      const n = i + 1;
+      if (!isObj(u)) continue;                 // already named above
+      if (!isStr(u.name)) continue;
+      if (!isStr(u.receiptHash)) continue;      // already named above
+      if (!isStr(u.kind)) { findings.push('unit ' + n + " ('" + u.name + "') has no kind to audit"); continue; }
+      const actual = byHash.get(u.receiptHash);
+      if (!actual) { unverifiable.push(u.name); continue; }
+      if (actual.kind !== u.kind) { findings.push('unit ' + n + " ('" + u.name + "'): the department claims kind " + u.kind + ' but the real receipt is ' + actual.kind); continue; }
+      let v;
+      if (actual.kind === 'veridia-pipeline') v = verifyPipelineReceipt(actual);
+      else if (actual.kind === 'veridia-crosscheck') v = verifyCrosscheckReceipt(actual);
+      else v = { ok: false, why: 'not a receipt kind this audit understands: ' + actual.kind };
+      if (!v.ok) { findings.push('unit ' + n + " ('" + u.name + "'): " + v.why); continue; }
+      if (!v.valid) { findings.push('unit ' + n + " ('" + u.name + "'): the real receipt does not verify: " + v.why); continue; }
+      if (actual.verdict !== u.verdict) findings.push('unit ' + n + " ('" + u.name + "'): the department claims verdict " + u.verdict + ' but the real receipt says ' + actual.verdict);
+    }
+  }
+
+  let verdict;
+  if (findings.length > 0) verdict = 'DISCREPANT';
+  else if (unverifiable.length > 0) verdict = 'UNVERIFIABLE';
+  else verdict = 'CONFIRMED';
+
+  const body = {
+    v: 1,
+    kind: 'veridia-audit',
+    departmentHash: isStr(department.hash) ? department.hash : null,
+    createdAt,
+    recomputedMerkleRoot,
+    findings,
+    unverifiable,
+    verdict,
+    scope: "An independent audit of a department: re-derives the Merkle root from the department's own unit rows, and matches every claimed unit to the REAL receipt it names (by hash, never by name) to confirm the department's summary — kind and verdict — actually matches what that receipt says. CONFIRMED = every claim checked against its real receipt and the Merkle root recomputed clean; UNVERIFIABLE = every checked claim held but at least one unit's real receipt was never supplied for audit; DISCREPANT = a claim did not match its real receipt, the root did not recompute, or the department failed its own self-check. It proves the department told the truth about the evidence it was given — not that the underlying work itself was correct.",
+  };
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  return { ok: true, receipt: { ...body, hash: h.hash } };
+}
+
+/** auditSignable(receipt) — the exact canonical bytes an Ed25519 signature covers (minus signature). */
+function auditSignable(receipt) {
+  if (!isObj(receipt)) return { ok: false, why: 'not a veridia audit receipt' };
+  if (receipt.kind !== 'veridia-audit') return { ok: false, why: 'not a veridia audit receipt' };
+  if (!isStr(receipt.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...receipt };
+  delete body.signature;
+  return { ok: true, payload: canon(body) };
+}
+
+/** verifyAuditReceipt(r) — matches its own hash AND the verdict matches its findings/evidence gaps. */
+function verifyAuditReceipt(r) {
+  if (!isObj(r)) return { ok: false, why: 'not a veridia audit receipt' };
+  if (r.kind !== 'veridia-audit') return { ok: false, why: 'not a veridia audit receipt' };
+  if (!isStr(r.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...r };
+  delete body.hash;
+  delete body.signature;
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  if (h.hash !== r.hash) return { ok: true, valid: false, why: 'the receipt does not match its own fingerprint — it was changed after it was issued' };
+  if (!Array.isArray(r.findings)) return { ok: true, valid: false, why: 'the receipt has no findings record' };
+  if (!Array.isArray(r.unverifiable)) return { ok: true, valid: false, why: 'the receipt has no unverifiable record' };
+  let expected;
+  if (r.findings.length > 0) expected = 'DISCREPANT';
+  else if (r.unverifiable.length > 0) expected = 'UNVERIFIABLE';
+  else expected = 'CONFIRMED';
+  if (r.verdict !== expected) return { ok: true, valid: false, why: 'the audit verdict does not match its findings' };
+  return { ok: true, valid: true, why: 'audit intact' };
+}
 // ⟦KERNEL-END⟧
 
 const $ = (id) => document.getElementById(id);
@@ -1032,7 +1209,72 @@ $('deptClean').addEventListener('click', () => runDept('clean'));
 $('deptFlag').addEventListener('click', () => runDept('flag'));
 $('deptIncompleteBtn').addEventListener('click', () => runDept('incomplete'));
 
-// ── verify a received receipt (cross-check OR pipeline OR department) ──────────────────────────────────
+// ── the octahedron: an independent audit of a department — the cube’s dual (demo) ──────────────────────
+let lastAudit = null;
+function runAudit(kind){
+  const out = $('auditOut');
+  const invoiceUnit = cleanPipeUnit('aud-inv-' + kind);                                    // real verdict: CLEAN
+  const fraudUnit = kind === 'lie' ? flagPipeUnit('aud-fraud-' + kind) : crosscheckUnit('aud-fraud-' + kind);   // the 'lie' demo needs a worse sibling to hide behind
+  const dept = composeDepartment({
+    name: 'Accounts payable',
+    expected: ['invoice-process', 'fraud-audit'],
+    units: [ { name: 'invoice-process', receipt: invoiceUnit }, { name: 'fraud-audit', receipt: fraudUnit } ],
+    createdAt: new Date().toISOString(),
+  });
+  out.classList.remove('hidden');
+  if (!dept.ok){ out.innerHTML = '<span class="pill bad" style="display:inline-block">✗ ' + esc(dept.why) + '</span>'; lastAudit = null; out.scrollIntoView({behavior:'smooth',block:'start'}); return; }
+  let department = dept.receipt;
+  let receipts = [invoiceUnit, fraudUnit];
+  let note = '';
+  if (kind === 'lie'){
+    const body = { ...department }; delete body.hash; delete body.signature;
+    body.units = body.units.map((u) => (u.name === 'invoice-process' ? { ...u, verdict: 'MAJORITY' } : u));   // the forged claim
+    department = { ...body, hash: sha256(canon(body)).hash };
+    note = 'This department receipt was tampered with — someone changed the invoice-process unit’s verdict from CLEAN to MAJORITY. Because fraud-audit is already worse (FLAGGED), the department’s own top-level verdict doesn’t change, so <b>verifyDepartmentReceipt still says this receipt is valid</b>. Only matching it back to the real receipts catches the lie.';
+  } else if (kind === 'unverifiable'){
+    receipts = [invoiceUnit];   // fraud-audit’s real receipt is withheld from the auditor
+    note = 'The auditor was only handed one of the two real receipts. It never assumes the other would have matched — the withheld unit is UNVERIFIABLE, named, not silently passed.';
+  }
+  const audit = auditDepartment({ department, receipts, createdAt: new Date().toISOString() });
+  lastAudit = audit.ok ? audit.receipt : null;
+  renderAudit(audit, department, note);
+}
+function renderAudit(audit, department, note){
+  const out = $('auditOut');
+  if (!audit.ok){ out.innerHTML = '<span class="pill bad" style="display:inline-block">✗ ' + esc(audit.why) + '</span>'; out.scrollIntoView({behavior:'smooth',block:'start'}); return; }
+  const r = audit.receipt;
+  const col = r.verdict === 'CONFIRMED' ? 'var(--veri)' : (r.verdict === 'UNVERIFIABLE' ? 'var(--gold)' : 'var(--bad)');
+  const bg = r.verdict === 'CONFIRMED' ? 'rgba(91,214,166,.10)' : (r.verdict === 'UNVERIFIABLE' ? 'rgba(217,164,65,.10)' : 'rgba(224,106,95,.10)');
+  let h = '<div class="verdict-big" style="color:' + col + ';background:' + bg + '">◈ AUDIT ' + r.verdict + '</div>';
+  h += '<div class="kvline" style="margin-top:10px">Department verdict (as claimed): <b>' + esc(department.verdict) + '</b> · self-check: <b>' + (verifyDepartmentReceipt(department).valid ? '✓ passes on its own' : '✗ fails on its own') + '</b></div>';
+  if (r.recomputedMerkleRoot) h += '<div class="kvline">Recomputed Merkle root: <span style="font-family:var(--mono)">' + esc(r.recomputedMerkleRoot.slice(0, 20)) + '…</span></div>';
+  if (r.findings.length) h += '<p class="note" style="margin-top:10px"><b style="color:var(--bad)">Findings:</b></p><ul style="margin:4px 0 0 20px;color:var(--dim)">' + r.findings.map((f) => '<li>' + esc(f) + '</li>').join('') + '</ul>';
+  if (r.unverifiable.length) h += '<div class="kvline" style="margin-top:8px">Unverifiable (no real receipt supplied): <b style="color:var(--gold)">' + r.unverifiable.map(esc).join(', ') + '</b></div>';
+  if (note) h += '<p class="note" style="margin-top:10px">' + note + '</p>';
+  h += '<div class="cta-row" style="margin-top:14px"><button class="btn veri" id="dlAudit">⤓ Download signed audit receipt</button></div><p id="auditDl" class="note"></p>';
+  out.innerHTML = h;
+  $('dlAudit').addEventListener('click', dlAudit);
+  out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+async function dlAudit(){
+  if (!lastAudit) return;
+  let receipt = lastAudit, signed = false;
+  try {
+    const kp = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+    const payload = new TextEncoder().encode(auditSignable(receipt).payload);
+    const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, kp.privateKey, payload));
+    const pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+    receipt = { ...receipt, signature: { alg: 'Ed25519', pub: toHex(pub), sig: toHex(sig) } };
+    signed = true;
+  } catch (e) { /* no Ed25519 — the self-hash still makes it tamper-evident */ }
+  download(JSON.stringify(receipt, null, 2), 'veridia-audit.json');
+  $('auditDl').innerHTML = (verifyAuditReceipt(receipt).valid ? '✓ ' : '⚠ ') + 'Downloaded <b>veridia-audit.json</b> — ' + (signed ? 'signed and ' : '') + 'tamper-evident. It proves the department told the truth about the evidence it was given — not that the underlying work itself was correct.';
+}
+$('auditConfirmed').addEventListener('click', () => runAudit('confirmed'));
+$('auditLie').addEventListener('click', () => runAudit('lie'));
+$('auditGap').addEventListener('click', () => runAudit('unverifiable'));
+
+// ── verify a received receipt (cross-check OR pipeline OR department OR audit) ──────────────────────────
 const dz = $('dropZone');
 dz.addEventListener('click', () => $('vFile').click());
 dz.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('vFile').click(); } });
@@ -1049,6 +1291,7 @@ async function verifyText(text){
   let v, signable;
   if (kind === 'veridia-department'){ v = verifyDepartmentReceipt(receipt); signable = departmentSignable; }
   else if (kind === 'veridia-pipeline'){ v = verifyPipelineReceipt(receipt); signable = pipelineSignable; }
+  else if (kind === 'veridia-audit'){ v = verifyAuditReceipt(receipt); signable = auditSignable; }
   else { v = verifyCrosscheckReceipt(receipt); signable = crosscheckSignable; }
   if (!v.ok){ vVerdict(false, 'This is not a Veridia receipt.', null); return; }
   if (!v.valid){ vVerdict(false, 'CHANGED — ' + v.why, receipt); return; }
@@ -1078,6 +1321,12 @@ function vVerdict(good, headline, receipt, sig){
       + (Array.isArray(receipt.missing) && receipt.missing.length ? ' · <span style="color:var(--bad)">missing: <b>' + receipt.missing.map(esc).join(', ') + '</b></span>' : '') + '</div>';
     h += '<div class="kvline">Units: <b>' + (Array.isArray(receipt.units) ? receipt.units.map((u) => esc(u.name) + ' (' + esc(u.verdict) + ')').join(' · ') : '?') + '</b></div>';
     if (good) h += '<div class="kvline" style="margin-top:8px">' + (sig === 'valid' ? 'Signature valid — unedited since signing.' : 'The units match the receipt’s own Merkle root (unedited).') + ' It proves the department is complete and every unit verified, <b>not that the combined output is true</b>.</div>';
+  } else if (receipt && receipt.kind === 'veridia-audit'){
+    const nFind = Array.isArray(receipt.findings) ? receipt.findings.length : 0;
+    const nUnv = Array.isArray(receipt.unverifiable) ? receipt.unverifiable.length : 0;
+    h += '<div class="kvline">Audit verdict: <b>' + esc(receipt.verdict) + '</b>' + (nFind ? ' · <span style="color:var(--bad)">' + nFind + ' finding' + (nFind > 1 ? 's' : '') + '</span>' : '') + (nUnv ? ' · unverifiable: <b>' + receipt.unverifiable.map(esc).join(', ') + '</b>' : '') + '</div>';
+    if (nFind) h += '<div class="kvline">' + receipt.findings.map(esc).join('<br>') + '</div>';
+    if (good) h += '<div class="kvline" style="margin-top:8px">' + (sig === 'valid' ? 'Signature valid — unedited since signing.' : 'The findings match the receipt’s own fingerprint (unedited).') + ' It proves the department told the truth about the evidence it was given, <b>not that the underlying work itself was correct</b>.</div>';
   }
   h += '</div>';
   $('vOut').innerHTML = h;

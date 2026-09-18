@@ -503,3 +503,164 @@ export function verifyDepartmentReceipt(r) {
   if (r.verdict !== want) return { ok: true, valid: false, why: 'the department verdict does not match its units' };
   return { ok: true, valid: true, why: 'department intact' };
 }
+
+// ── THE OCTAHEDRON: an independent audit — the cube's dual ────────────────────────────────────────
+// The cube COMPOSES: given real receipts, it builds ONE department and trusts its own summary rows
+// (name, kind, receiptHash, verdict) because it derived them itself, in the same call, from those real
+// receipts. verifyDepartmentReceipt then re-checks that receipt against ITSELF — same hash, same
+// completeness arithmetic, same verdict severity — which catches tampering after the fact but cannot
+// catch a department that lied about its units from the start, because it never sees the real unit
+// receipts again, only the summary the department chose to keep.
+//
+// The octahedron is that gap, closed. Geometrically it is the cube's dual — 8 vertices/6 faces swap to
+// 6 vertices/8 faces, building-up swaps to breaking-down. Operationally: composeDepartment goes MANY
+// real receipts → ONE summarised receipt; auditDepartment goes ONE department receipt + the MANY real
+// receipts it claims to summarise → an independent verdict, re-derived from the primary sources, never
+// from the department's own say-so. Two concrete things it catches that verifyDepartmentReceipt cannot,
+// by construction, no matter how carefully it is written:
+//   1. verifyDepartmentReceipt never recomputes the Merkle root from the unit hashes — it only re-hashes
+//      the receipt body. A department can ship a merkleRoot that was never actually derived from its
+//      units and still pass its own self-check, as long as the stored root is internally consistent
+//      with the rest of the (also self-consistent) body. auditDepartment recomputes the root from the
+//      unit rows and compares.
+//   2. a department's unit row is a CLAIM about a real receipt, not the receipt itself. Nothing about
+//      self-consistency stops a forged row from lying about ONE unit's verdict as long as the overall
+//      department verdict — the WORST field across all units — happens not to change (a lie hiding
+//      behind a genuinely worse sibling). Handed the real receipts, auditDepartment matches each row to
+//      its real receipt BY HASH (the only honest link — never by caller-supplied name or position, both
+//      of which a forger controls) and confirms kind and verdict actually match what that receipt says.
+//
+// Kar's honest rule, a fourth time, verbatim from the pattern that built the triangle/tetra/cube: an
+// auditor not HANDED a unit's real receipt must say so — UNVERIFIABLE, never assumed to match. Silence
+// there would be a worse lie than the one this organ exists to catch. So the verdict has three tiers,
+// worst to best: DISCREPANT (a claim was checked against its real receipt and did not match, the Merkle
+// root did not recompute, or the department fails its own self-check) beats UNVERIFIABLE (every claim
+// checked so far held, but at least one unit's real receipt was never supplied) beats CONFIRMED (every
+// claimed unit matched its real receipt — kind, verdict — and the Merkle root recomputed clean). Refuses
+// only on input too malformed to attempt an audit at all; a real mismatch or an evidence gap is a
+// VERDICT, always named, never hidden.
+export function auditDepartment(input) {
+  if (!isObj(input)) return { ok: false, why: 'auditDepartment takes an object' };
+  const department = input.department;
+  const receipts = input.receipts;
+  const createdAt = input.createdAt;
+  if (!isObj(department)) return { ok: false, why: 'auditDepartment needs a department receipt' };
+  if (department.kind !== 'veridia-department') return { ok: false, why: 'not a veridia department receipt — nothing to audit' };
+  if (!isStr(createdAt)) return { ok: false, why: 'the audit needs a createdAt timestamp' };
+  if (createdAt.length === 0) return { ok: false, why: 'the audit needs a non-empty createdAt timestamp' };
+  if (!Array.isArray(receipts)) return { ok: false, why: 'receipts must be a list of the actual unit receipts' };
+  for (const [i, rc] of receipts.entries()) {
+    const n = i + 1;
+    if (!isObj(rc)) return { ok: false, why: 'receipt ' + n + ' must be an object' };
+  }
+
+  const findings = [];
+  const unverifiable = [];
+
+  // the department's own self-check comes first — if it fails, that IS the top finding, named plainly
+  const selfCheck = verifyDepartmentReceipt(department);
+  if (!selfCheck.ok) return selfCheck;   // too malformed to even attempt (no hash, wrong kind, etc.)
+  if (!selfCheck.valid) findings.push('the department receipt does not verify on its own: ' + selfCheck.why);
+
+  // recompute the Merkle root independently from the department's own unit rows — verifyDepartmentReceipt
+  // never does this, so a self-consistent-but-fabricated root would otherwise sail through unnoticed
+  let recomputedMerkleRoot = null;
+  if (!Array.isArray(department.units)) {
+    findings.push('the department has no units array — the Merkle root cannot be recomputed');
+  } else {
+    const leaves = [];
+    let leavesOk = true;
+    for (const [i, u] of department.units.entries()) {
+      const n = i + 1;
+      if (!isObj(u)) { findings.push('unit ' + n + ' is malformed — the Merkle root cannot be recomputed'); leavesOk = false; continue; }
+      if (!isStr(u.receiptHash)) { findings.push('unit ' + n + " ('" + (isStr(u.name) ? u.name : '?') + "') has no receipt hash — the Merkle root cannot be recomputed"); leavesOk = false; continue; }
+      leaves.push(u.receiptHash);
+    }
+    if (leavesOk) {
+      if (leaves.length > 0) {
+        const mr = merkleRoot(leaves.slice().sort());
+        if (!mr.ok) findings.push('the Merkle root could not be recomputed: ' + mr.why);
+        else recomputedMerkleRoot = mr.root;
+      }
+      const claimedRoot = (department.merkleRoot === undefined) ? null : department.merkleRoot;
+      if (recomputedMerkleRoot !== claimedRoot) findings.push("the department's Merkle root does not match what its own units hash to — a forged or corrupted rollup");
+    }
+  }
+
+  // match each claimed unit to its REAL receipt by hash (never by name — a forger controls the name)
+  // and independently re-verify it, rather than trusting the department's summary row
+  const byHash = new Map();
+  for (const rc of receipts) {
+    if (isStr(rc.hash)) byHash.set(rc.hash, rc);
+  }
+  if (Array.isArray(department.units)) {
+    for (const [i, u] of department.units.entries()) {
+      const n = i + 1;
+      if (!isObj(u)) continue;                 // already named above
+      if (!isStr(u.name)) continue;
+      if (!isStr(u.receiptHash)) continue;      // already named above
+      if (!isStr(u.kind)) { findings.push('unit ' + n + " ('" + u.name + "') has no kind to audit"); continue; }
+      const actual = byHash.get(u.receiptHash);
+      if (!actual) { unverifiable.push(u.name); continue; }
+      if (actual.kind !== u.kind) { findings.push('unit ' + n + " ('" + u.name + "'): the department claims kind " + u.kind + ' but the real receipt is ' + actual.kind); continue; }
+      let v;
+      if (actual.kind === 'veridia-pipeline') v = verifyPipelineReceipt(actual);
+      else if (actual.kind === 'veridia-crosscheck') v = verifyCrosscheckReceipt(actual);
+      else v = { ok: false, why: 'not a receipt kind this audit understands: ' + actual.kind };
+      if (!v.ok) { findings.push('unit ' + n + " ('" + u.name + "'): " + v.why); continue; }
+      if (!v.valid) { findings.push('unit ' + n + " ('" + u.name + "'): the real receipt does not verify: " + v.why); continue; }
+      if (actual.verdict !== u.verdict) findings.push('unit ' + n + " ('" + u.name + "'): the department claims verdict " + u.verdict + ' but the real receipt says ' + actual.verdict);
+    }
+  }
+
+  let verdict;
+  if (findings.length > 0) verdict = 'DISCREPANT';
+  else if (unverifiable.length > 0) verdict = 'UNVERIFIABLE';
+  else verdict = 'CONFIRMED';
+
+  const body = {
+    v: 1,
+    kind: 'veridia-audit',
+    departmentHash: isStr(department.hash) ? department.hash : null,
+    createdAt,
+    recomputedMerkleRoot,
+    findings,
+    unverifiable,
+    verdict,
+    scope: "An independent audit of a department: re-derives the Merkle root from the department's own unit rows, and matches every claimed unit to the REAL receipt it names (by hash, never by name) to confirm the department's summary — kind and verdict — actually matches what that receipt says. CONFIRMED = every claim checked against its real receipt and the Merkle root recomputed clean; UNVERIFIABLE = every checked claim held but at least one unit's real receipt was never supplied for audit; DISCREPANT = a claim did not match its real receipt, the root did not recompute, or the department failed its own self-check. It proves the department told the truth about the evidence it was given — not that the underlying work itself was correct.",
+  };
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  return { ok: true, receipt: { ...body, hash: h.hash } };
+}
+
+/** auditSignable(receipt) — the exact canonical bytes an Ed25519 signature covers (minus signature). */
+export function auditSignable(receipt) {
+  if (!isObj(receipt)) return { ok: false, why: 'not a veridia audit receipt' };
+  if (receipt.kind !== 'veridia-audit') return { ok: false, why: 'not a veridia audit receipt' };
+  if (!isStr(receipt.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...receipt };
+  delete body.signature;
+  return { ok: true, payload: canon(body) };
+}
+
+/** verifyAuditReceipt(r) — matches its own hash AND the verdict matches its findings/evidence gaps. */
+export function verifyAuditReceipt(r) {
+  if (!isObj(r)) return { ok: false, why: 'not a veridia audit receipt' };
+  if (r.kind !== 'veridia-audit') return { ok: false, why: 'not a veridia audit receipt' };
+  if (!isStr(r.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...r };
+  delete body.hash;
+  delete body.signature;
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  if (h.hash !== r.hash) return { ok: true, valid: false, why: 'the receipt does not match its own fingerprint — it was changed after it was issued' };
+  if (!Array.isArray(r.findings)) return { ok: true, valid: false, why: 'the receipt has no findings record' };
+  if (!Array.isArray(r.unverifiable)) return { ok: true, valid: false, why: 'the receipt has no unverifiable record' };
+  let expected;
+  if (r.findings.length > 0) expected = 'DISCREPANT';
+  else if (r.unverifiable.length > 0) expected = 'UNVERIFIABLE';
+  else expected = 'CONFIRMED';
+  if (r.verdict !== expected) return { ok: true, valid: false, why: 'the audit verdict does not match its findings' };
+  return { ok: true, valid: true, why: 'audit intact' };
+}
