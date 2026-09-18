@@ -36,7 +36,8 @@
         { "@type": "Question", "name": "Why must the three be independent?", "acceptedAnswer": { "@type": "Answer", "text": "Because agreement among identical models is not verification. Three clones tell the same confident lie three times. So Veridia refuses a panel whose members are the same model, and records the three distinct fingerprints in the receipt as proof the cross-check was real." } },
         { "@type": "Question", "name": "Does a unanimous verdict mean the answer is true?", "acceptedAnswer": { "@type": "Answer", "text": "No. It means three independent models agreed — which is strong evidence, but a unanimous panel can still be unanimously wrong. Veridia proves agreement and independence, not truth. Fields where the panel splits are escalated to a human." } },
         { "@type": "Question", "name": "What is a SPLIT?", "acceptedAnswer": { "@type": "Answer", "text": "When no answer for a field wins a majority, that field is SPLIT and escalates to a human or a frontier model. The fields that did reach agreement are still accepted — you don't discard a whole record over one uncertain field." } },
-        { "@type": "Question", "name": "What does the signed receipt prove?", "acceptedAnswer": { "@type": "Answer", "text": "It binds the panel (the three distinct fingerprints, and the receipt hashes chaining back to each node's scorecard), the per-field verdicts, and what escalated — into a tamper-evident, Ed25519-signable record anyone can re-verify offline. It proves the panel was independent and agreed; it does not certify truth." } }
+        { "@type": "Question", "name": "What does the signed receipt prove?", "acceptedAnswer": { "@type": "Answer", "text": "It binds the panel (the three distinct fingerprints, and the receipt hashes chaining back to each node's scorecard), the per-field verdicts, and what escalated — into a tamper-evident, Ed25519-signable record anyone can re-verify offline. It proves the panel was independent and agreed; it does not certify truth." } },
+        { "@type": "Question", "name": "What is a department, and how does it catch a missing process?", "acceptedAnswer": { "@type": "Answer", "text": "A department aggregates several already-verified units — pipelines and cross-checks — into one auditable whole, folding their fingerprints into a single Merkle root. It declares the units it expects up front, so if a process was quietly dropped the department is marked INCOMPLETE and the missing unit is named. A verified set of units proves each one was checked, but only a declared charter proves none is missing." } }
       ]
     }
   ]
@@ -126,6 +127,7 @@
   <nav class="top">
     <a href="#check">Cross-check</a>
     <a href="#pipeline">Pipeline</a>
+    <a href="#department">Department</a>
     <a href="#how">How</a>
     <a href="#verify">Verify a receipt</a>
     <a href="#faq">FAQ</a>
@@ -190,6 +192,20 @@
   <p class="note"><b>CLEAN</b> — every step's panel agreed. <b>MAJORITY</b> — some step needed a majority. <b>FLAGGED</b> — a step split a field, so the process continues on what was agreed and a human resolves that field. A broken step or a broken seam can't issue a receipt at all. It proves the process was cross-checked and correctly chained — not that the final answer is true.</p>
 </div></section>
 
+<!-- THE CUBE: DEPARTMENT -->
+<section id="department"><div class="wrap">
+  <div class="eyebrow">▣ The cube · a whole department</div>
+  <h2 class="sec">Roll many verified units into one department you can audit at a glance.</h2>
+  <p class="sub">A pipeline proves one process. A real function — accounts payable, onboarding, claims — runs <b>several</b> processes side by side. The cube aggregates them: each unit is an already-verified pipeline or cross-check, and Veridia folds their fingerprints into a single <b>Merkle root</b> — one hash for the whole department. Its honest rule: the department <b>declares the units it expects</b>, so a process that was quietly dropped shows up as <b>INCOMPLETE</b> and is named. A gap can't hide behind a clean-looking summary.</p>
+  <div class="cta-row" style="margin-top:18px">
+    <button class="btn veri" id="deptClean">Roll up a clean department</button>
+    <button class="btn ghost" id="deptFlag">One where a unit needs a human</button>
+    <button class="btn ghost" id="deptIncompleteBtn">One with a missing process</button>
+  </div>
+  <div id="deptOut" class="card hidden" style="margin-top:16px;border-color:var(--veri)"></div>
+  <p class="note"><b>CLEAN</b> — every unit agreed and the charter is met. <b>MAJORITY</b> — a unit needed a majority. <b>FLAGGED</b> — a unit escalated to a human. <b>INCOMPLETE</b> — a declared unit is missing, or an uninvited one turned up. It proves the department is complete, each unit verified, and nothing tampered — not that the combined output is true.</p>
+</div></section>
+
 <!-- HOW -->
 <section id="how"><div class="wrap">
   <div class="eyebrow">In plain English</div>
@@ -226,6 +242,7 @@
     <details class="faq"><summary>Why must the three be independent?</summary><p>Because agreement among identical models is not verification. Three clones tell the same confident lie three times. So Veridia refuses a panel whose members are the same model, and records the three distinct fingerprints in the receipt as proof the cross-check was real.</p></details>
     <details class="faq"><summary>Does a unanimous verdict mean it's true?</summary><p>No. It means three independent models agreed — strong evidence, but a unanimous panel can still be unanimously wrong. Veridia proves agreement and independence, not truth. Split fields escalate to a human.</p></details>
     <details class="faq"><summary>What does the signed receipt prove?</summary><p>It binds the panel (three distinct fingerprints + the receipt hashes chaining back to each node's scorecard), the per-field verdicts, and what escalated — tamper-evident, Ed25519-signable, re-verifiable offline. It proves the panel was independent and agreed; it does not certify truth.</p></details>
+    <details class="faq"><summary>What's a "department", and how does it catch a missing process?</summary><p>A department rolls several already-verified units — pipelines and cross-checks — into one auditable whole, folding their fingerprints into a single Merkle root. It <b>declares the units it expects</b> up front, so if a process was quietly dropped the department is marked <b>INCOMPLETE</b> and the missing unit is named. A verified set of units proves each one was checked; only a declared charter proves none is missing.</p></details>
     <details class="faq"><summary>How does this relate to FallForge Mint?</summary><p>FallForge Mint is the foundry — it mints one owned, proven, signed model for a task. Veridia is the next step: it takes three of those and cross-checks them so the composition is correct, not just safe. It consumes what the foundry makes; it never touches it.</p></details>
   </div>
 </div></section>
@@ -574,6 +591,185 @@ function verifyPipelineReceipt(r) {
   if (r.verdict !== expected) return { ok: true, valid: false, why: 'the pipeline verdict does not match its steps' };
   return { ok: true, valid: true, why: 'pipeline intact' };
 }
+
+// ── THE CUBE: the department ────────────────────────────────────────────────
+// The tetra chained steps in SEQUENCE (a process). The cube aggregates several
+// independent verified units — cross-checks (triangles) and pipelines (tetras) —
+// IN PARALLEL into one department, and folds their fingerprints into a single
+// Merkle root (the department hash). Kar's honest rule: a set of verified units
+// proves each unit was checked and untampered, but NOT that none is MISSING — so
+// the department DECLARES its expected units upfront (its charter). A unit that is
+// absent, or one that turned up uninvited, makes the department INCOMPLETE and is
+// named in the receipt. A dropped process cannot hide. Honest scope: it proves the
+// department is complete, each unit internally verified, and nothing tampered —
+// NOT that the department's combined output is true.
+const MIN_UNITS = 2;   // one unit is just a pipeline; a department is two or more
+
+/** merkleRoot(leaves) — a deterministic binary hash tree over already-hashed leaves.
+ *  0 leaves → refuse; 1 leaf → itself; else pair-hash up, duplicating a lone odd node. */
+function merkleRoot(leaves) {
+  if (!Array.isArray(leaves)) return { ok: false, why: 'merkle leaves must be a list' };
+  if (leaves.length === 0) return { ok: false, why: 'a merkle tree needs at least one leaf' };
+  for (const [i, lf] of leaves.entries()) {
+    if (!isStr(lf)) return { ok: false, why: 'merkle leaf ' + (i + 1) + ' must be a hash string' };
+    if (lf.length === 0) return { ok: false, why: 'merkle leaf ' + (i + 1) + ' is empty' };
+  }
+  let level = leaves.slice();
+  while (level.length > 1) {
+    const next = [];
+    for (let i = 0; i < level.length; i += 2) {
+      const left = level[i];
+      const right = (i + 1 < level.length) ? level[i + 1] : level[i];
+      const h = sha256(left + right);
+      if (!h.ok) return { ok: false, why: h.why };
+      next.push(h.hash);
+    }
+    level = next;
+  }
+  return { ok: true, root: level[0] };
+}
+
+/** composeDepartment(input) — input = { name, expected:[unitName…], units:[{name,receipt}…], createdAt }.
+ *  Validates each present unit (cross-check OR pipeline), checks the charter, rolls the unit
+ *  fingerprints into a Merkle root, and emits one department receipt. Refuses only on a broken
+ *  unit or malformed input; a missing/extra unit is a verdict (INCOMPLETE), not a refusal. */
+function composeDepartment(input) {
+  if (!isObj(input)) return { ok: false, why: 'composeDepartment takes an object' };
+  const name = input.name;
+  const expected = input.expected;
+  const units = input.units;
+  const createdAt = input.createdAt;
+  if (!isStr(name)) return { ok: false, why: 'the department needs a name' };
+  if (name.trim().length === 0) return { ok: false, why: 'the department needs a non-empty name' };
+  if (!isStr(createdAt)) return { ok: false, why: 'the department needs a createdAt timestamp' };
+  if (createdAt.length === 0) return { ok: false, why: 'the department needs a non-empty createdAt timestamp' };
+  if (!Array.isArray(expected)) return { ok: false, why: 'the department must declare its expected units' };
+  if (expected.length < MIN_UNITS) return { ok: false, why: 'a department declares at least ' + MIN_UNITS + ' expected units' };
+  for (const [i, e] of expected.entries()) {
+    if (!isStr(e)) return { ok: false, why: 'expected unit ' + (i + 1) + ' needs a name' };
+    if (e.trim().length === 0) return { ok: false, why: 'expected unit ' + (i + 1) + ' needs a non-empty name' };
+  }
+  const expectedNames = expected.map((e) => e.trim());
+  if (new Set(expectedNames).size !== expectedNames.length) return { ok: false, why: 'the expected units must be distinctly named' };
+  if (!Array.isArray(units)) return { ok: false, why: 'units must be a list' };
+  const rows = [];
+  const presentNames = [];
+  for (const [i, u] of units.entries()) {
+    const n = i + 1;
+    if (!isObj(u)) return { ok: false, why: 'unit ' + n + ' must be an object' };
+    if (!isStr(u.name)) return { ok: false, why: 'unit ' + n + ' needs a name' };
+    if (u.name.trim().length === 0) return { ok: false, why: 'unit ' + n + ' needs a non-empty name' };
+    if (!isObj(u.receipt)) return { ok: false, why: 'unit ' + n + ' needs a receipt' };
+    const kind = u.receipt.kind;
+    let v;
+    if (kind === 'veridia-pipeline') v = verifyPipelineReceipt(u.receipt);
+    else if (kind === 'veridia-crosscheck') v = verifyCrosscheckReceipt(u.receipt);
+    else return { ok: false, why: 'unit ' + n + ' is not a Veridia receipt' };
+    if (!v.ok) return { ok: false, why: 'unit ' + n + ' is not a valid receipt' };
+    if (!v.valid) return { ok: false, why: 'unit ' + n + ' has an invalid receipt: ' + v.why };
+    rows.push({ name: u.name.trim(), kind, receiptHash: u.receipt.hash, verdict: u.receipt.verdict });
+    presentNames.push(u.name.trim());
+  }
+  if (new Set(presentNames).size !== presentNames.length) return { ok: false, why: 'the units must be distinctly named' };
+  // the charter check: expected vs present (Kar's honest rule — a dropped unit cannot hide)
+  const presentSet = new Set(presentNames);
+  const expectedSet = new Set(expectedNames);
+  const missing = expectedNames.filter((e) => !presentSet.has(e));
+  const unexpected = presentNames.filter((p) => !expectedSet.has(p));
+  // roll the unit fingerprints into a Merkle root; sort the leaf hashes themselves (default lexicographic,
+  // locale-independent, no comparator) so the department id is a pure function of the SET of unit receipts
+  const leaves = rows.map((r) => r.receiptHash).sort();
+  let root = null;
+  if (leaves.length > 0) {
+    const mr = merkleRoot(leaves);
+    if (!mr.ok) return { ok: false, why: mr.why };
+    root = mr.root;
+  }
+  // department verdict — severity: INCOMPLETE worst, then FLAGGED, then MAJORITY, then CLEAN
+  let hasFlag = false;
+  let hasMajority = false;
+  for (const r of rows) {
+    if (r.verdict === 'SPLIT') hasFlag = true;
+    if (r.verdict === 'FLAGGED') hasFlag = true;
+    if (r.verdict === 'MAJORITY') hasMajority = true;
+  }
+  let verdict;
+  if (missing.length > 0) verdict = 'INCOMPLETE';
+  else if (unexpected.length > 0) verdict = 'INCOMPLETE';
+  else if (hasFlag) verdict = 'FLAGGED';
+  else if (hasMajority) verdict = 'MAJORITY';
+  else verdict = 'CLEAN';
+  const body = {
+    v: 1,
+    kind: 'veridia-department',
+    name: name.trim(),
+    expected: expectedNames,
+    units: rows,
+    missing,
+    unexpected,
+    merkleRoot: root,
+    verdict, createdAt,
+    scope: "A department: several independently-verified units (cross-checks and pipelines) rolled into one auditable whole, their fingerprints folded into a single Merkle root. It DECLARES its expected units, so a missing or uninvited unit shows as INCOMPLETE — a dropped process cannot hide. CLEAN = every unit agreed; MAJORITY = a unit needed a majority; FLAGGED = a unit escalated to a human; INCOMPLETE = the charter is unmet. It proves the department is complete, each unit verified, and nothing tampered — not that the combined output is true.",
+  };
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  return { ok: true, receipt: { ...body, hash: h.hash } };
+}
+
+/** departmentSignable(receipt) — the exact canonical bytes an Ed25519 signature covers (minus signature). */
+function departmentSignable(receipt) {
+  if (!isObj(receipt)) return { ok: false, why: 'not a veridia department receipt' };
+  if (receipt.kind !== 'veridia-department') return { ok: false, why: 'not a veridia department receipt' };
+  if (!isStr(receipt.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...receipt };
+  delete body.signature;
+  return { ok: true, payload: canon(body) };
+}
+
+/** verifyDepartmentReceipt(r) — matches its own hash AND the verdict matches its units + charter. */
+function verifyDepartmentReceipt(r) {
+  if (!isObj(r)) return { ok: false, why: 'not a veridia department receipt' };
+  if (r.kind !== 'veridia-department') return { ok: false, why: 'not a veridia department receipt' };
+  if (!isStr(r.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...r };
+  delete body.hash;
+  delete body.signature;
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  if (h.hash !== r.hash) return { ok: true, valid: false, why: 'the receipt does not match its own fingerprint — it was changed after it was issued' };
+  if (!Array.isArray(r.units)) return { ok: true, valid: false, why: 'the receipt has no units' };
+  if (!Array.isArray(r.expected)) return { ok: true, valid: false, why: 'the receipt has no charter' };
+  if (r.expected.length < MIN_UNITS) return { ok: true, valid: false, why: 'a department declares at least ' + MIN_UNITS + ' expected units' };
+  if (!Array.isArray(r.missing)) return { ok: true, valid: false, why: 'the receipt has no completeness record' };
+  if (!Array.isArray(r.unexpected)) return { ok: true, valid: false, why: 'the receipt has no completeness record' };
+  // the completeness record must match the charter vs the present units (a forged empty `missing` is caught)
+  const presentNames = [];
+  let hasFlag = false;
+  let hasMajority = false;
+  for (const u of r.units) {
+    if (!isObj(u)) return { ok: true, valid: false, why: 'a unit is malformed' };
+    if (!isStr(u.name)) return { ok: true, valid: false, why: 'a unit is missing its name' };
+    presentNames.push(u.name);
+    if (u.verdict === 'SPLIT') hasFlag = true;
+    if (u.verdict === 'FLAGGED') hasFlag = true;
+    if (u.verdict === 'MAJORITY') hasMajority = true;
+  }
+  const presentSet = new Set(presentNames);
+  const expectedSet = new Set(r.expected);
+  const trueMissing = r.expected.filter((e) => !presentSet.has(e));
+  const trueUnexpected = presentNames.filter((p) => !expectedSet.has(p));
+  if (trueMissing.length !== r.missing.length) return { ok: true, valid: false, why: 'the completeness record does not match the charter' };
+  if (trueUnexpected.length !== r.unexpected.length) return { ok: true, valid: false, why: 'the completeness record does not match the charter' };
+  // the department verdict must match its units + charter — a receipt claiming CLEAN over a missing unit is a lie
+  let want;
+  if (trueMissing.length > 0) want = 'INCOMPLETE';
+  else if (trueUnexpected.length > 0) want = 'INCOMPLETE';
+  else if (hasFlag) want = 'FLAGGED';
+  else if (hasMajority) want = 'MAJORITY';
+  else want = 'CLEAN';
+  if (r.verdict !== want) return { ok: true, valid: false, why: 'the department verdict does not match its units' };
+  return { ok: true, valid: true, why: 'department intact' };
+}
 // ⟦KERNEL-END⟧
 
 const $ = (id) => document.getElementById(id);
@@ -761,7 +957,82 @@ $('pipeClean').addEventListener('click', () => runPipe('clean'));
 $('pipeFlag').addEventListener('click', () => runPipe('flag'));
 $('pipeBroken').addEventListener('click', () => runPipe('broken'));
 
-// ── verify a received receipt (cross-check OR pipeline) ───────────────────────────────────────────────
+// ── the cube: aggregate verified units into a department (demo) ───────────────────────────────────────
+function cleanPipeUnit(seed){
+  const s1 = panelReceipt(seed + '-x', [ {supplier:'ACME Ltd',total:654},{supplier:'ACME Ltd',total:654},{supplier:'ACME Ltd',total:654} ]);
+  const s2 = panelReceipt(seed + '-y', [ {vat:'standard',rate:20},{vat:'standard',rate:20},{vat:'standard',rate:20} ]);
+  const seam = sha256(canon(s1.receipt.accepted)).hash;
+  return composePipeline([ {name:'extract',receipt:s1.receipt,inputHash:null}, {name:'classify',receipt:s2.receipt,inputHash:seam} ], new Date().toISOString()).receipt;
+}
+function flagPipeUnit(seed){
+  const s1 = panelReceipt(seed + '-x', [ {supplier:'ACME Ltd',total:654},{supplier:'ACME Ltd',total:654},{supplier:'ACME Ltd',total:654} ]);
+  const s2 = panelReceipt(seed + '-y', [ {vat:'standard'},{vat:'reduced'},{vat:'zero'} ]);   // 3-way split → FLAGGED unit
+  const seam = sha256(canon(s1.receipt.accepted)).hash;
+  return composePipeline([ {name:'extract',receipt:s1.receipt,inputHash:null}, {name:'classify',receipt:s2.receipt,inputHash:seam} ], new Date().toISOString()).receipt;
+}
+function crosscheckUnit(seed){ return panelReceipt(seed, [ {approved:true},{approved:true},{approved:true} ]).receipt; }
+function unitColor(v){ return (v === 'CLEAN' || v === 'UNANIMOUS') ? 'var(--veri)' : (v === 'MAJORITY' ? 'var(--gold)' : 'var(--bad)'); }
+let lastDept = null;
+function runDept(kind){
+  const out = $('deptOut');
+  let expected, units;
+  if (kind === 'clean'){
+    expected = ['invoice-process','fraud-audit'];
+    units = [ {name:'invoice-process',receipt:cleanPipeUnit('inv')}, {name:'fraud-audit',receipt:crosscheckUnit('aud')} ];
+  } else if (kind === 'flag'){
+    expected = ['invoice-process','fraud-audit'];
+    units = [ {name:'invoice-process',receipt:flagPipeUnit('inv')}, {name:'fraud-audit',receipt:crosscheckUnit('aud')} ];
+  } else {   // incomplete — the charter declares three, only two are supplied
+    expected = ['invoice-process','fraud-audit','sign-off'];
+    units = [ {name:'invoice-process',receipt:cleanPipeUnit('inv')}, {name:'fraud-audit',receipt:crosscheckUnit('aud')} ];
+  }
+  const built = composeDepartment({ name:'Accounts payable', expected, units, createdAt: new Date().toISOString() });
+  out.classList.remove('hidden');
+  if (!built.ok){ out.innerHTML = '<span class="pill bad" style="display:inline-block">✗ ' + esc(built.why) + '</span><p class="note" style="margin-top:10px">A tampered or invalid unit can’t go into a department — there is nothing to roll up, so no receipt is issued.</p>'; lastDept = null; out.scrollIntoView({behavior:'smooth',block:'start'}); return; }
+  lastDept = built.receipt;
+  renderDept(built.receipt);
+}
+function renderDept(r){
+  const out = $('deptOut');
+  const col = r.verdict === 'CLEAN' ? 'var(--veri)' : (r.verdict === 'MAJORITY' ? 'var(--gold)' : 'var(--bad)');
+  const bg = r.verdict === 'CLEAN' ? 'rgba(91,214,166,.10)' : (r.verdict === 'MAJORITY' ? 'rgba(217,164,65,.10)' : 'rgba(224,106,95,.10)');
+  let h = '<div class="verdict-big" style="color:' + col + ';background:' + bg + '">▣ DEPARTMENT ' + r.verdict + '</div>';
+  h += '<table class="adj" style="margin-top:12px"><thead><tr><th>unit</th><th>kind</th><th>verdict</th></tr></thead><tbody>';
+  r.units.forEach((u) => {
+    h += '<tr class="' + ((u.verdict === 'SPLIT' || u.verdict === 'FLAGGED') ? 'esc' : '') + '"><td><b style="color:var(--cream)">' + esc(u.name) + '</b></td>'
+      + '<td>' + (u.kind === 'veridia-pipeline' ? '△ pipeline' : '△ cross-check') + '</td>'
+      + '<td style="color:' + unitColor(u.verdict) + ';font-weight:600">' + esc(u.verdict) + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  h += '<div class="kvline" style="margin-top:10px">Charter: <b>' + r.expected.length + '</b> expected · <b>' + r.units.length + '</b> present'
+    + (r.missing.length ? ' · <span style="color:var(--bad)">missing: <b>' + r.missing.map(esc).join(', ') + '</b></span>' : '')
+    + (r.unexpected.length ? ' · <span style="color:var(--bad)">uninvited: <b>' + r.unexpected.map(esc).join(', ') + '</b></span>' : '') + '</div>';
+  if (r.merkleRoot) h += '<div class="kvline">Merkle root: <span style="font-family:var(--mono)">' + esc(r.merkleRoot.slice(0, 20)) + '…</span></div>';
+  if (r.verdict === 'INCOMPLETE') h += '<p class="note">The department declared a unit it never received — so it is <b>INCOMPLETE</b>, and the receipt names exactly what is missing. A dropped process cannot hide behind a clean-looking summary.</p>';
+  h += '<div class="cta-row" style="margin-top:14px"><button class="btn veri" id="dlDept">⤓ Download signed department receipt</button></div><p id="deptDl" class="note"></p>';
+  out.innerHTML = h;
+  $('dlDept').addEventListener('click', dlDept);
+  out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+async function dlDept(){
+  if (!lastDept) return;
+  let receipt = lastDept, signed = false;
+  try {
+    const kp = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+    const payload = new TextEncoder().encode(departmentSignable(receipt).payload);
+    const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, kp.privateKey, payload));
+    const pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+    receipt = { ...receipt, signature: { alg: 'Ed25519', pub: toHex(pub), sig: toHex(sig) } };
+    signed = true;
+  } catch (e) { /* no Ed25519 — the Merkle root still makes it tamper-evident */ }
+  download(JSON.stringify(receipt, null, 2), 'veridia-department.json');
+  $('deptDl').innerHTML = (verifyDepartmentReceipt(receipt).valid ? '✓ ' : '⚠ ') + 'Downloaded <b>veridia-department.json</b> — ' + (signed ? 'signed and ' : '') + 'tamper-evident. It rolls the units into one Merkle root and proves the department is complete, each unit verified, nothing tampered — not that the combined output is true.';
+}
+$('deptClean').addEventListener('click', () => runDept('clean'));
+$('deptFlag').addEventListener('click', () => runDept('flag'));
+$('deptIncompleteBtn').addEventListener('click', () => runDept('incomplete'));
+
+// ── verify a received receipt (cross-check OR pipeline OR department) ──────────────────────────────────
 const dz = $('dropZone');
 dz.addEventListener('click', () => $('vFile').click());
 dz.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('vFile').click(); } });
@@ -774,14 +1045,17 @@ function readFile(file){ const r = new FileReader(); r.onload = () => verifyText
 async function verifyText(text){
   let receipt;
   try { receipt = JSON.parse(text); } catch { vVerdict(false, 'That is not valid JSON — drop or paste the whole receipt.', null); return; }
-  const isPipe = receipt && receipt.kind === 'veridia-pipeline';
-  const v = isPipe ? verifyPipelineReceipt(receipt) : verifyCrosscheckReceipt(receipt);
+  const kind = receipt && receipt.kind;
+  let v, signable;
+  if (kind === 'veridia-department'){ v = verifyDepartmentReceipt(receipt); signable = departmentSignable; }
+  else if (kind === 'veridia-pipeline'){ v = verifyPipelineReceipt(receipt); signable = pipelineSignable; }
+  else { v = verifyCrosscheckReceipt(receipt); signable = crosscheckSignable; }
   if (!v.ok){ vVerdict(false, 'This is not a Veridia receipt.', null); return; }
   if (!v.valid){ vVerdict(false, 'CHANGED — ' + v.why, receipt); return; }
   let sig = 'unsigned';
   if (receipt.signature && receipt.signature.alg === 'Ed25519' && typeof receipt.signature.pub === 'string'){
     try {
-      const sp = isPipe ? pipelineSignable(receipt) : crosscheckSignable(receipt);
+      const sp = signable(receipt);
       const pub = await crypto.subtle.importKey('raw', fromHex(receipt.signature.pub), { name: 'Ed25519' }, false, ['verify']);
       const ok = await crypto.subtle.verify({ name: 'Ed25519' }, pub, fromHex(receipt.signature.sig), new TextEncoder().encode(sp.payload));
       sig = ok ? 'valid' : 'invalid';
@@ -799,6 +1073,11 @@ function vVerdict(good, headline, receipt, sig){
   } else if (receipt && receipt.kind === 'veridia-pipeline'){
     h += '<div class="kvline">Pipeline verdict: <b>' + esc(receipt.verdict) + '</b> · ' + (Array.isArray(receipt.steps) ? receipt.steps.length : '?') + ' steps: <b>' + (Array.isArray(receipt.steps) ? receipt.steps.map((s) => esc(s.name) + ' (' + esc(s.verdict) + ')').join(' → ') : '?') + '</b></div>';
     if (good) h += '<div class="kvline" style="margin-top:8px">' + (sig === 'valid' ? 'Signature valid — unedited since signing.' : 'The verdicts match the receipt’s own fingerprint (unedited).') + ' It proves the process was cross-checked and correctly chained, <b>not that the answer is true</b>.</div>';
+  } else if (receipt && receipt.kind === 'veridia-department'){
+    h += '<div class="kvline">Department verdict: <b>' + esc(receipt.verdict) + '</b> · <b>' + (Array.isArray(receipt.units) ? receipt.units.length : '?') + '</b> of <b>' + (Array.isArray(receipt.expected) ? receipt.expected.length : '?') + '</b> declared units'
+      + (Array.isArray(receipt.missing) && receipt.missing.length ? ' · <span style="color:var(--bad)">missing: <b>' + receipt.missing.map(esc).join(', ') + '</b></span>' : '') + '</div>';
+    h += '<div class="kvline">Units: <b>' + (Array.isArray(receipt.units) ? receipt.units.map((u) => esc(u.name) + ' (' + esc(u.verdict) + ')').join(' · ') : '?') + '</b></div>';
+    if (good) h += '<div class="kvline" style="margin-top:8px">' + (sig === 'valid' ? 'Signature valid — unedited since signing.' : 'The units match the receipt’s own Merkle root (unedited).') + ' It proves the department is complete and every unit verified, <b>not that the combined output is true</b>.</div>';
   }
   h += '</div>';
   $('vOut').innerHTML = h;

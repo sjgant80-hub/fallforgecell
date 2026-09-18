@@ -324,3 +324,182 @@ export function verifyPipelineReceipt(r) {
   if (r.verdict !== expected) return { ok: true, valid: false, why: 'the pipeline verdict does not match its steps' };
   return { ok: true, valid: true, why: 'pipeline intact' };
 }
+
+// ── THE CUBE: the department ────────────────────────────────────────────────
+// The tetra chained steps in SEQUENCE (a process). The cube aggregates several
+// independent verified units — cross-checks (triangles) and pipelines (tetras) —
+// IN PARALLEL into one department, and folds their fingerprints into a single
+// Merkle root (the department hash). Kar's honest rule: a set of verified units
+// proves each unit was checked and untampered, but NOT that none is MISSING — so
+// the department DECLARES its expected units upfront (its charter). A unit that is
+// absent, or one that turned up uninvited, makes the department INCOMPLETE and is
+// named in the receipt. A dropped process cannot hide. Honest scope: it proves the
+// department is complete, each unit internally verified, and nothing tampered —
+// NOT that the department's combined output is true.
+export const MIN_UNITS = 2;   // one unit is just a pipeline; a department is two or more
+
+/** merkleRoot(leaves) — a deterministic binary hash tree over already-hashed leaves.
+ *  0 leaves → refuse; 1 leaf → itself; else pair-hash up, duplicating a lone odd node. */
+export function merkleRoot(leaves) {
+  if (!Array.isArray(leaves)) return { ok: false, why: 'merkle leaves must be a list' };
+  if (leaves.length === 0) return { ok: false, why: 'a merkle tree needs at least one leaf' };
+  for (const [i, lf] of leaves.entries()) {
+    if (!isStr(lf)) return { ok: false, why: 'merkle leaf ' + (i + 1) + ' must be a hash string' };
+    if (lf.length === 0) return { ok: false, why: 'merkle leaf ' + (i + 1) + ' is empty' };
+  }
+  let level = leaves.slice();
+  while (level.length > 1) {
+    const next = [];
+    for (let i = 0; i < level.length; i += 2) {
+      const left = level[i];
+      const right = (i + 1 < level.length) ? level[i + 1] : level[i];
+      const h = sha256(left + right);
+      if (!h.ok) return { ok: false, why: h.why };
+      next.push(h.hash);
+    }
+    level = next;
+  }
+  return { ok: true, root: level[0] };
+}
+
+/** composeDepartment(input) — input = { name, expected:[unitName…], units:[{name,receipt}…], createdAt }.
+ *  Validates each present unit (cross-check OR pipeline), checks the charter, rolls the unit
+ *  fingerprints into a Merkle root, and emits one department receipt. Refuses only on a broken
+ *  unit or malformed input; a missing/extra unit is a verdict (INCOMPLETE), not a refusal. */
+export function composeDepartment(input) {
+  if (!isObj(input)) return { ok: false, why: 'composeDepartment takes an object' };
+  const name = input.name;
+  const expected = input.expected;
+  const units = input.units;
+  const createdAt = input.createdAt;
+  if (!isStr(name)) return { ok: false, why: 'the department needs a name' };
+  if (name.trim().length === 0) return { ok: false, why: 'the department needs a non-empty name' };
+  if (!isStr(createdAt)) return { ok: false, why: 'the department needs a createdAt timestamp' };
+  if (createdAt.length === 0) return { ok: false, why: 'the department needs a non-empty createdAt timestamp' };
+  if (!Array.isArray(expected)) return { ok: false, why: 'the department must declare its expected units' };
+  if (expected.length < MIN_UNITS) return { ok: false, why: 'a department declares at least ' + MIN_UNITS + ' expected units' };
+  for (const [i, e] of expected.entries()) {
+    if (!isStr(e)) return { ok: false, why: 'expected unit ' + (i + 1) + ' needs a name' };
+    if (e.trim().length === 0) return { ok: false, why: 'expected unit ' + (i + 1) + ' needs a non-empty name' };
+  }
+  const expectedNames = expected.map((e) => e.trim());
+  if (new Set(expectedNames).size !== expectedNames.length) return { ok: false, why: 'the expected units must be distinctly named' };
+  if (!Array.isArray(units)) return { ok: false, why: 'units must be a list' };
+  const rows = [];
+  const presentNames = [];
+  for (const [i, u] of units.entries()) {
+    const n = i + 1;
+    if (!isObj(u)) return { ok: false, why: 'unit ' + n + ' must be an object' };
+    if (!isStr(u.name)) return { ok: false, why: 'unit ' + n + ' needs a name' };
+    if (u.name.trim().length === 0) return { ok: false, why: 'unit ' + n + ' needs a non-empty name' };
+    if (!isObj(u.receipt)) return { ok: false, why: 'unit ' + n + ' needs a receipt' };
+    const kind = u.receipt.kind;
+    let v;
+    if (kind === 'veridia-pipeline') v = verifyPipelineReceipt(u.receipt);
+    else if (kind === 'veridia-crosscheck') v = verifyCrosscheckReceipt(u.receipt);
+    else return { ok: false, why: 'unit ' + n + ' is not a Veridia receipt' };
+    if (!v.ok) return { ok: false, why: 'unit ' + n + ' is not a valid receipt' };
+    if (!v.valid) return { ok: false, why: 'unit ' + n + ' has an invalid receipt: ' + v.why };
+    rows.push({ name: u.name.trim(), kind, receiptHash: u.receipt.hash, verdict: u.receipt.verdict });
+    presentNames.push(u.name.trim());
+  }
+  if (new Set(presentNames).size !== presentNames.length) return { ok: false, why: 'the units must be distinctly named' };
+  // the charter check: expected vs present (Kar's honest rule — a dropped unit cannot hide)
+  const presentSet = new Set(presentNames);
+  const expectedSet = new Set(expectedNames);
+  const missing = expectedNames.filter((e) => !presentSet.has(e));
+  const unexpected = presentNames.filter((p) => !expectedSet.has(p));
+  // roll the unit fingerprints into a Merkle root; sort the leaf hashes themselves (default lexicographic,
+  // locale-independent, no comparator) so the department id is a pure function of the SET of unit receipts
+  const leaves = rows.map((r) => r.receiptHash).sort();
+  let root = null;
+  if (leaves.length > 0) {
+    const mr = merkleRoot(leaves);
+    if (!mr.ok) return { ok: false, why: mr.why };
+    root = mr.root;
+  }
+  // department verdict — severity: INCOMPLETE worst, then FLAGGED, then MAJORITY, then CLEAN
+  let hasFlag = false;
+  let hasMajority = false;
+  for (const r of rows) {
+    if (r.verdict === 'SPLIT') hasFlag = true;
+    if (r.verdict === 'FLAGGED') hasFlag = true;
+    if (r.verdict === 'MAJORITY') hasMajority = true;
+  }
+  let verdict;
+  if (missing.length > 0) verdict = 'INCOMPLETE';
+  else if (unexpected.length > 0) verdict = 'INCOMPLETE';
+  else if (hasFlag) verdict = 'FLAGGED';
+  else if (hasMajority) verdict = 'MAJORITY';
+  else verdict = 'CLEAN';
+  const body = {
+    v: 1,
+    kind: 'veridia-department',
+    name: name.trim(),
+    expected: expectedNames,
+    units: rows,
+    missing,
+    unexpected,
+    merkleRoot: root,
+    verdict, createdAt,
+    scope: "A department: several independently-verified units (cross-checks and pipelines) rolled into one auditable whole, their fingerprints folded into a single Merkle root. It DECLARES its expected units, so a missing or uninvited unit shows as INCOMPLETE — a dropped process cannot hide. CLEAN = every unit agreed; MAJORITY = a unit needed a majority; FLAGGED = a unit escalated to a human; INCOMPLETE = the charter is unmet. It proves the department is complete, each unit verified, and nothing tampered — not that the combined output is true.",
+  };
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  return { ok: true, receipt: { ...body, hash: h.hash } };
+}
+
+/** departmentSignable(receipt) — the exact canonical bytes an Ed25519 signature covers (minus signature). */
+export function departmentSignable(receipt) {
+  if (!isObj(receipt)) return { ok: false, why: 'not a veridia department receipt' };
+  if (receipt.kind !== 'veridia-department') return { ok: false, why: 'not a veridia department receipt' };
+  if (!isStr(receipt.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...receipt };
+  delete body.signature;
+  return { ok: true, payload: canon(body) };
+}
+
+/** verifyDepartmentReceipt(r) — matches its own hash AND the verdict matches its units + charter. */
+export function verifyDepartmentReceipt(r) {
+  if (!isObj(r)) return { ok: false, why: 'not a veridia department receipt' };
+  if (r.kind !== 'veridia-department') return { ok: false, why: 'not a veridia department receipt' };
+  if (!isStr(r.hash)) return { ok: false, why: 'the receipt has no hash' };
+  const body = { ...r };
+  delete body.hash;
+  delete body.signature;
+  const h = sha256(canon(body));
+  if (!h.ok) return { ok: false, why: h.why };
+  if (h.hash !== r.hash) return { ok: true, valid: false, why: 'the receipt does not match its own fingerprint — it was changed after it was issued' };
+  if (!Array.isArray(r.units)) return { ok: true, valid: false, why: 'the receipt has no units' };
+  if (!Array.isArray(r.expected)) return { ok: true, valid: false, why: 'the receipt has no charter' };
+  if (r.expected.length < MIN_UNITS) return { ok: true, valid: false, why: 'a department declares at least ' + MIN_UNITS + ' expected units' };
+  if (!Array.isArray(r.missing)) return { ok: true, valid: false, why: 'the receipt has no completeness record' };
+  if (!Array.isArray(r.unexpected)) return { ok: true, valid: false, why: 'the receipt has no completeness record' };
+  // the completeness record must match the charter vs the present units (a forged empty `missing` is caught)
+  const presentNames = [];
+  let hasFlag = false;
+  let hasMajority = false;
+  for (const u of r.units) {
+    if (!isObj(u)) return { ok: true, valid: false, why: 'a unit is malformed' };
+    if (!isStr(u.name)) return { ok: true, valid: false, why: 'a unit is missing its name' };
+    presentNames.push(u.name);
+    if (u.verdict === 'SPLIT') hasFlag = true;
+    if (u.verdict === 'FLAGGED') hasFlag = true;
+    if (u.verdict === 'MAJORITY') hasMajority = true;
+  }
+  const presentSet = new Set(presentNames);
+  const expectedSet = new Set(r.expected);
+  const trueMissing = r.expected.filter((e) => !presentSet.has(e));
+  const trueUnexpected = presentNames.filter((p) => !expectedSet.has(p));
+  if (trueMissing.length !== r.missing.length) return { ok: true, valid: false, why: 'the completeness record does not match the charter' };
+  if (trueUnexpected.length !== r.unexpected.length) return { ok: true, valid: false, why: 'the completeness record does not match the charter' };
+  // the department verdict must match its units + charter — a receipt claiming CLEAN over a missing unit is a lie
+  let want;
+  if (trueMissing.length > 0) want = 'INCOMPLETE';
+  else if (trueUnexpected.length > 0) want = 'INCOMPLETE';
+  else if (hasFlag) want = 'FLAGGED';
+  else if (hasMajority) want = 'MAJORITY';
+  else want = 'CLEAN';
+  if (r.verdict !== want) return { ok: true, valid: false, why: 'the department verdict does not match its units' };
+  return { ok: true, valid: true, why: 'department intact' };
+}

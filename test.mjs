@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  MIN_PANEL, MIN_STEPS,
+  MIN_PANEL, MIN_STEPS, MIN_UNITS,
   sha256, canon, normValue, agree,
   panelIndependent, adjudicateField, adjudicate,
   crosscheckReceipt, crosscheckSignable, verifyCrosscheckReceipt,
   composePipeline, pipelineSignable, verifyPipelineReceipt,
+  merkleRoot, composeDepartment, departmentSignable, verifyDepartmentReceipt,
 } from './kernel.mjs';
 
 test('sha256 + canon: vendored proven pair still holds (FIPS-pinned, order-blind)', () => {
@@ -255,4 +256,170 @@ test('verifyPipelineReceipt: catches tamper and a lying composite verdict', () =
   assert.equal(verifyPipelineReceipt(noSteps).valid, false);
   const oneStep = { ...pbody, steps: [pbody.steps[0]] }; oneStep.hash = sha256(canon(oneStep)).hash;
   assert.equal(verifyPipelineReceipt(oneStep).valid, false);
+});
+
+// ── the cube: aggregate independent verified units into a Merkle department ───────────────────────
+test('merkleRoot: deterministic tree, order-fixed, refuses empty/bad leaves', () => {
+  const a = sha256('a').hash, b = sha256('b').hash, c = sha256('c').hash;
+  assert.equal(merkleRoot([a]).root, a);                     // one leaf hashes to itself
+  assert.equal(merkleRoot([a, b]).root, sha256(a + b).hash); // a pair is the hash of its halves
+  assert.notEqual(merkleRoot([a, b]).root, merkleRoot([b, a]).root); // leaf order is significant
+  // three leaves: the odd node is duplicated up (a || b) then (c || c)
+  const expect3 = sha256(sha256(a + b).hash + sha256(c + c).hash).hash;
+  assert.equal(merkleRoot([a, b, c]).root, expect3);
+  assert.equal(merkleRoot([]).ok, false);
+  assert.equal(merkleRoot('nope').ok, false);
+  // a bad SECOND leaf is named "leaf 2" (kills the i + 1 counter)
+  const emptyLeaf = merkleRoot([a, '']);
+  assert.equal(emptyLeaf.ok, false);
+  assert.ok(emptyLeaf.why.includes('leaf 2'), 'the empty leaf is named, got: ' + emptyLeaf.why);
+  const badLeaf = merkleRoot([a, 7]);
+  assert.equal(badLeaf.ok, false);
+  assert.ok(badLeaf.why.includes('leaf 2'), 'the non-string leaf is named, got: ' + badLeaf.why);
+});
+
+// build a CLEAN pipeline unit (two unanimous steps), a FLAGGED one (a split step), a MAJORITY one
+function pipeUnit(sA, aA, sB, aB) {
+  const r1 = stepReceipt(sA, aA);
+  const r2 = stepReceipt(sB, aB);
+  const seam = sha256(canon(r1.accepted)).hash;
+  return composePipeline([{ name: 's1', receipt: r1, inputHash: null }, { name: 's2', receipt: r2, inputHash: seam }], 't').receipt;
+}
+function flaggedPipeUnit() {
+  const r1 = stepReceipt('fa', { x: 1 });
+  const rSplit = crosscheckReceipt({ taskHash: sha256('fsplit').hash, createdAt: 't', nodes: [
+    { fingerprint: 'm1#a', receiptHash: sha256('fa1').hash, answer: { c: 'x' } },
+    { fingerprint: 'm2#b', receiptHash: sha256('fa2').hash, answer: { c: 'y' } },
+    { fingerprint: 'm3#c', receiptHash: sha256('fa3').hash, answer: { c: 'z' } },
+  ] }).receipt;
+  const seam = sha256(canon(r1.accepted)).hash;
+  return composePipeline([{ name: 's1', receipt: r1, inputHash: null }, { name: 's2', receipt: rSplit, inputHash: seam }], 't').receipt;
+}
+function majPipeUnit() {
+  const r1 = stepReceipt('ma', { x: 1 });
+  const rMaj = crosscheckReceipt({ taskHash: sha256('mmaj').hash, createdAt: 't', nodes: [
+    { fingerprint: 'm1#a', receiptHash: sha256('ma1').hash, answer: { k: 'v' } },
+    { fingerprint: 'm2#b', receiptHash: sha256('ma2').hash, answer: { k: 'v' } },
+    { fingerprint: 'm3#c', receiptHash: sha256('ma3').hash, answer: { k: 'w' } },
+  ] }).receipt;
+  const seam = sha256(canon(r1.accepted)).hash;
+  return composePipeline([{ name: 's1', receipt: r1, inputHash: null }, { name: 's2', receipt: rMaj, inputHash: seam }], 't').receipt;
+}
+
+test('composeDepartment: rolls verified units into a Merkle department; declares its charter', () => {
+  const u1 = pipeUnit('a1', { x: 1 }, 'a2', { y: 2 });   // CLEAN pipeline unit
+  const u2 = stepReceipt('cc', { z: 3 });                // UNANIMOUS cross-check unit
+  const good = composeDepartment({
+    name: 'invoices',
+    expected: ['extract', 'audit'],
+    units: [{ name: 'extract', receipt: u1 }, { name: 'audit', receipt: u2 }],
+    createdAt: '2026-09-18T00:00:00Z',
+  });
+  assert.equal(good.ok, true);
+  assert.equal(good.receipt.kind, 'veridia-department');
+  assert.equal(good.receipt.verdict, 'CLEAN');            // both units agreed, charter met
+  assert.equal(good.receipt.units.length, 2);
+  assert.deepEqual(good.receipt.missing, []);
+  assert.deepEqual(good.receipt.unexpected, []);
+  assert.equal(good.receipt.merkleRoot.length, 64);
+  assert.equal(good.receipt.hash.length, 64);
+  assert.equal(verifyDepartmentReceipt(good.receipt).valid, true);
+
+  // the department id is order-independent: the SAME units in the other order → the SAME Merkle root
+  const swapped = composeDepartment({ name: 'invoices', expected: ['extract', 'audit'], units: [{ name: 'audit', receipt: u2 }, { name: 'extract', receipt: u1 }], createdAt: '2026-09-18T00:00:00Z' });
+  assert.equal(swapped.receipt.merkleRoot, good.receipt.merkleRoot);
+
+  // Kar's honest rule — a MISSING unit makes the department INCOMPLETE and is NAMED (a dropped process can't hide)
+  const incomplete = composeDepartment({ name: 'invoices', expected: ['extract', 'audit'], units: [{ name: 'extract', receipt: u1 }], createdAt: 't' });
+  assert.equal(incomplete.ok, true);
+  assert.equal(incomplete.receipt.verdict, 'INCOMPLETE');
+  assert.deepEqual(incomplete.receipt.missing, ['audit']);
+  assert.equal(verifyDepartmentReceipt(incomplete.receipt).valid, true);
+
+  // an UNINVITED unit (present but not in the charter) is also INCOMPLETE and named
+  const extra = composeDepartment({ name: 'invoices', expected: ['extract', 'audit'], units: [{ name: 'extract', receipt: u1 }, { name: 'audit', receipt: u2 }, { name: 'ghost', receipt: u2 }], createdAt: 't' });
+  assert.equal(extra.receipt.verdict, 'INCOMPLETE');
+  assert.deepEqual(extra.receipt.unexpected, ['ghost']);
+
+  // a ZERO-unit department (nothing supplied) still issues an honest INCOMPLETE receipt — both units named
+  // missing, no Merkle root — rather than refusing (the guard `leaves.length > 0` must stay strict)
+  const empty = composeDepartment({ name: 'invoices', expected: ['extract', 'audit'], units: [], createdAt: 't' });
+  assert.equal(empty.ok, true);
+  assert.equal(empty.receipt.verdict, 'INCOMPLETE');
+  assert.deepEqual(empty.receipt.missing, ['extract', 'audit']);
+  assert.equal(empty.receipt.merkleRoot, null);
+  assert.equal(verifyDepartmentReceipt(empty.receipt).valid, true);
+
+  // a FLAGGED unit (charter met) → the whole department is FLAGGED
+  const flagged = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: u1 }, { name: 'b', receipt: flaggedPipeUnit() }], createdAt: 't' });
+  assert.equal(flagged.receipt.verdict, 'FLAGGED');
+  assert.equal(verifyDepartmentReceipt(flagged.receipt).valid, true);
+
+  // a MAJORITY unit (charter met, none flagged) → the department is MAJORITY
+  const majd = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: u1 }, { name: 'b', receipt: majPipeUnit() }], createdAt: 't' });
+  assert.equal(majd.receipt.verdict, 'MAJORITY');
+
+  // refusals — each guard isolated
+  assert.equal(composeDepartment('nope').ok, false);
+  assert.equal(composeDepartment({ name: '', expected: ['a', 'b'], units: [], createdAt: 't' }).ok, false);        // empty name
+  assert.equal(composeDepartment({ name: 'd', expected: ['a'], units: [], createdAt: 't' }).ok, false);           // < MIN_UNITS charter
+  assert.equal(composeDepartment({ name: 'd', expected: ['a', 'a'], units: [], createdAt: 't' }).ok, false);      // non-distinct charter
+  // a bad SECOND charter entry is named "expected unit 2" (kills the i + 1 counter on lines 382/383)
+  const badExpName = composeDepartment({ name: 'd', expected: ['ok', 7], units: [], createdAt: 't' });
+  assert.equal(badExpName.ok, false);
+  assert.ok(badExpName.why.includes('expected unit 2'), 'the bad charter entry is named, got: ' + badExpName.why);
+  const emptyExpName = composeDepartment({ name: 'd', expected: ['ok', '  '], units: [], createdAt: 't' });
+  assert.equal(emptyExpName.ok, false);
+  assert.ok(emptyExpName.why.includes('expected unit 2'), 'the empty charter entry is named, got: ' + emptyExpName.why);
+  assert.equal(composeDepartment({ name: 'd', expected: ['a', 'b'], units: [], createdAt: '' }).ok, false);       // empty createdAt
+  assert.equal(composeDepartment({ name: 'd', expected: ['a', 'b'], units: 'nope', createdAt: 't' }).ok, false);  // units not a list
+  // a bad SECOND unit is named "unit 2" (kills the n = i + 1 counter)
+  const badSecond = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: u1 }, { name: 'b', receipt: { kind: 'other' } }], createdAt: 't' });
+  assert.equal(badSecond.ok, false);
+  assert.ok(badSecond.why.includes('unit 2'), 'the bad second unit is named, got: ' + badSecond.why);
+  // a TAMPERED unit receipt is refused — you cannot build a department on a broken unit
+  const tampered = { ...u1, verdict: 'MAJORITY' };   // hash no longer matches its body
+  assert.equal(composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: tampered }, { name: 'b', receipt: u2 }], createdAt: 't' }).ok, false);
+  // duplicate present unit names are refused (two 'a' units would mask one)
+  assert.equal(composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: u1 }, { name: 'a', receipt: u2 }], createdAt: 't' }).ok, false);
+  assert.equal(MIN_UNITS, 2);
+});
+
+test('verifyDepartmentReceipt: catches tamper, a lying verdict, and a forged completeness record', () => {
+  const u1 = pipeUnit('a1', { x: 1 }, 'a2', { y: 2 });
+  const u2 = stepReceipt('cc', { z: 3 });
+  const d = composeDepartment({ name: 'd', expected: ['a', 'b'], units: [{ name: 'a', receipt: u1 }, { name: 'b', receipt: u2 }], createdAt: 't' }).receipt;
+  assert.equal(verifyDepartmentReceipt(d).valid, true);
+  assert.equal(verifyDepartmentReceipt({ ...d, createdAt: 'x' }).valid, false);   // tamper → hash mismatch
+
+  // forge 1: claim CLEAN while a unit is secretly FLAGGED, re-match the hash → the verdict invariant catches it
+  const b1 = { ...d }; delete b1.hash; delete b1.signature;
+  b1.units = b1.units.map((u, i) => (i === 0 ? { ...u, verdict: 'FLAGGED' } : u));   // verdict stays CLEAN, a unit is FLAGGED
+  const forgedVerdict = { ...b1, hash: sha256(canon(b1)).hash };
+  const v1 = verifyDepartmentReceipt(forgedVerdict);
+  assert.equal(v1.valid, false);
+  assert.ok(v1.why.includes('verdict'), 'the lie is named, got: ' + v1.why);
+
+  // forge 2: drop unit 'b' but keep missing:[] and CLEAN (hide the gap), re-match the hash →
+  // the completeness invariant catches it (recomputed against the charter)
+  const b2 = { ...d }; delete b2.hash; delete b2.signature;
+  b2.units = [b2.units[0]];   // only 'a' remains, but expected is still ['a','b']
+  b2.missing = [];            // the lie: claims nothing is missing
+  b2.verdict = 'CLEAN';
+  const forgedComplete = { ...b2, hash: sha256(canon(b2)).hash };
+  const v2 = verifyDepartmentReceipt(forgedComplete);
+  assert.equal(v2.valid, false);
+  assert.ok(v2.why.includes('charter') || v2.why.includes('completeness'), 'the hidden gap is named, got: ' + v2.why);
+
+  const s = departmentSignable(d);
+  assert.equal(s.payload.includes('"signature"'), false);
+  assert.equal(s.payload.includes(d.hash), true);
+  assert.equal(departmentSignable({ ...d, signature: { alg: 'Ed25519' } }).payload, s.payload);
+  assert.equal(verifyDepartmentReceipt({ kind: 'other', hash: 'x' }).ok, false);
+  assert.equal(verifyDepartmentReceipt({ kind: 'veridia-department' }).ok, false);   // no hash
+  assert.equal(departmentSignable({ kind: 'veridia-department' }).ok, false);         // no hash
+  // the charter guard on verify: a receipt whose expected shrank below MIN_UNITS is invalid
+  const b3 = { ...d }; delete b3.hash; delete b3.signature;
+  const shortCharter = { ...b3, expected: ['a'] }; shortCharter.hash = sha256(canon(shortCharter)).hash;
+  assert.equal(verifyDepartmentReceipt(shortCharter).valid, false);
 });
