@@ -31,4 +31,4 @@ It emits a signed cross-check receipt binding the panel (independence proof), th
 - `node make-page.mjs && git diff --exit-code index.html` — the live page IS the gated kernel.
 - `node tools/page-gate.mjs` — scripts parse, no placeholders, no dead links, no committed secrets.
 
-Part of the FallForge estate. Powered by the Konomi architecture, created by Thomas Frumkin. MIT. ◊·κ=1.
+Part of the FallForge estate. Powered by the Konomi architecture, created by Thomas Frumkin. MIT. .
